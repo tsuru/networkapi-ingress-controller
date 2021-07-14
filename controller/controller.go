@@ -1,33 +1,28 @@
-package main
+package controller
 
 import (
 	"context"
 	"fmt"
 	"net"
 	"reflect"
-	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/tsuru/networkapi-ingress-controller/config"
 	"github.com/tsuru/networkapi-ingress-controller/networkapi"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	networkingv1Beta1 "k8s.io/api/networking/v1beta1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
-	ingressClassName = "globo-networkapi"
 	nameCommonPrefix = "kube-napi-ingress"
 )
+
+var _ reconcile.Reconciler = &reconcileIngress{}
 
 type reconcileIngress struct {
 	client    client.Client
@@ -35,65 +30,12 @@ type reconcileIngress struct {
 	cfg       config.Config
 }
 
-type endpointWatcher struct {
-	sync.RWMutex
-	ingressToEndpoint map[types.NamespacedName]types.NamespacedName
-}
-
 func NewReconciler(client client.Client) *reconcileIngress {
 	return &reconcileIngress{
 		client:    client,
+		cfg:       config.Get(),
 		endpoints: &endpointWatcher{},
 	}
-}
-
-var _ reconcile.Reconciler = &reconcileIngress{}
-
-var hasClass = predicate.NewPredicateFuncs(func(obj client.Object) bool {
-	ing, ok := obj.(*networkingv1.Ingress)
-	if ok && ing.Spec.IngressClassName != nil && *ing.Spec.IngressClassName != "" {
-		return *ing.Spec.IngressClassName == ingressClassName
-	}
-	ingClass := obj.GetAnnotations()[networkingv1Beta1.AnnotationIngressClass]
-	return ingClass == ingressClassName
-})
-
-func (w *endpointWatcher) mapFunc(obj client.Object) []reconcile.Request {
-	w.RLock()
-	defer w.RUnlock()
-	fullName := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
-	var reqs []reconcile.Request
-	for ing, endpoint := range w.ingressToEndpoint {
-		if endpoint == fullName {
-			reqs = append(reqs, reconcile.Request{NamespacedName: ing})
-		}
-	}
-	return reqs
-}
-
-func (w *endpointWatcher) addIngressEndpoint(ingName, endpointName types.NamespacedName) {
-	w.Lock()
-	defer w.Unlock()
-	w.ingressToEndpoint[ingName] = endpointName
-}
-
-func (w *endpointWatcher) removeIngress(ingName types.NamespacedName) {
-	w.Lock()
-	defer w.Unlock()
-	delete(w.ingressToEndpoint, ingName)
-}
-
-func (r *reconcileIngress) Watch(c controller.Controller) error {
-	err := c.Watch(&source.Kind{Type: &networkingv1.Ingress{}}, &handler.EnqueueRequestForObject{}, hasClass)
-	if err != nil {
-		return errors.Wrap(err, "unable to watch Ingress")
-	}
-
-	err = c.Watch(&source.Kind{Type: &corev1.Endpoints{}}, handler.EnqueueRequestsFromMapFunc(r.endpoints.mapFunc))
-	if err != nil {
-		return errors.Wrap(err, "unable to watch Endpoints")
-	}
-	return nil
 }
 
 func (r *reconcileIngress) vipName(ing *networkingv1.Ingress) string {

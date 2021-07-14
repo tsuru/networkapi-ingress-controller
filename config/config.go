@@ -2,8 +2,13 @@ package config
 
 import "time"
 
+const (
+	defaultIngressClassName = "globo-networkapi"
+)
+
 type Config struct {
 	ClusterName             string
+	IngressClassName        string
 	DefaultVIPEnvironmentID int
 	ReconcileInterval       time.Duration
 }
@@ -11,5 +16,6 @@ type Config struct {
 func Get() Config {
 	return Config{
 		ReconcileInterval: 5 * time.Minute,
+		IngressClassName:  defaultIngressClassName,
 	}
 }
