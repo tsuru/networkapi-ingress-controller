@@ -16,34 +16,34 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-type endpointWatcher struct {
+type serviceWatcher struct {
 	sync.RWMutex
-	ingressToEndpoint map[types.NamespacedName]types.NamespacedName
+	ingressToService map[types.NamespacedName]types.NamespacedName
 }
 
-func (w *endpointWatcher) mapFunc(obj client.Object) []reconcile.Request {
+func (w *serviceWatcher) mapFunc(obj client.Object) []reconcile.Request {
 	w.RLock()
 	defer w.RUnlock()
 	fullName := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
 	var reqs []reconcile.Request
-	for ing, endpoint := range w.ingressToEndpoint {
-		if endpoint == fullName {
+	for ing, svc := range w.ingressToService {
+		if svc == fullName {
 			reqs = append(reqs, reconcile.Request{NamespacedName: ing})
 		}
 	}
 	return reqs
 }
 
-func (w *endpointWatcher) addIngressEndpoint(ingName, endpointName types.NamespacedName) {
+func (w *serviceWatcher) addIngressService(ingName, svcName types.NamespacedName) {
 	w.Lock()
 	defer w.Unlock()
-	w.ingressToEndpoint[ingName] = endpointName
+	w.ingressToService[ingName] = svcName
 }
 
-func (w *endpointWatcher) removeIngress(ingName types.NamespacedName) {
+func (w *serviceWatcher) removeIngress(ingName types.NamespacedName) {
 	w.Lock()
 	defer w.Unlock()
-	delete(w.ingressToEndpoint, ingName)
+	delete(w.ingressToService, ingName)
 }
 
 func hasClass(ingressClassName string) predicate.Funcs {
@@ -63,7 +63,12 @@ func (r *reconcileIngress) Watch(c controller.Controller) error {
 		return errors.Wrap(err, "unable to watch Ingress")
 	}
 
-	err = c.Watch(&source.Kind{Type: &corev1.Endpoints{}}, handler.EnqueueRequestsFromMapFunc(r.endpoints.mapFunc))
+	err = c.Watch(&source.Kind{Type: &corev1.Service{}}, handler.EnqueueRequestsFromMapFunc(r.serviceWatcher.mapFunc))
+	if err != nil {
+		return errors.Wrap(err, "unable to watch Service")
+	}
+
+	err = c.Watch(&source.Kind{Type: &corev1.Endpoints{}}, handler.EnqueueRequestsFromMapFunc(r.serviceWatcher.mapFunc))
 	if err != nil {
 		return errors.Wrap(err, "unable to watch Endpoints")
 	}

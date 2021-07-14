@@ -25,16 +25,16 @@ const (
 var _ reconcile.Reconciler = &reconcileIngress{}
 
 type reconcileIngress struct {
-	client    client.Client
-	endpoints *endpointWatcher
-	cfg       config.Config
+	client         client.Client
+	serviceWatcher *serviceWatcher
+	cfg            config.Config
 }
 
 func NewReconciler(client client.Client) *reconcileIngress {
 	return &reconcileIngress{
-		client:    client,
-		cfg:       config.Get(),
-		endpoints: &endpointWatcher{},
+		client:         client,
+		cfg:            config.Get(),
+		serviceWatcher: &serviceWatcher{},
 	}
 }
 
@@ -180,7 +180,7 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 	err := r.client.Get(ctx, request.NamespacedName, ing)
 	if k8sErrors.IsNotFound(err) {
 		log.Error(nil, "Could not find Ingress")
-		r.endpoints.removeIngress(request.NamespacedName)
+		r.serviceWatcher.removeIngress(request.NamespacedName)
 		return result, nil
 	}
 	if err != nil {
@@ -203,7 +203,7 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 		Namespace: svc.Namespace,
 		Name:      svc.Name,
 	}
-	r.endpoints.addIngressEndpoint(request.NamespacedName, svcName)
+	r.serviceWatcher.addIngressService(request.NamespacedName, svcName)
 
 	targets, err := r.targetsForService(ctx, svcName, port)
 	if err != nil {
