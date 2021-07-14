@@ -171,6 +171,86 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, svcName types.
 	return targets, nil
 }
 
+func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
+	netapiCli := networkapi.Client()
+
+	wantedPool := &networkapi.Pool{
+		Name: r.poolName(ing),
+	}
+
+	for _, tg := range targets {
+		netIP, err := netapiCli.GetIP(ctx, tg.IP)
+		if err != nil && !networkapi.IsNotFound(err) {
+			return err
+		}
+		if networkapi.IsNotFound(err) {
+			netIP, err = netapiCli.CreateIP(ctx, &networkapi.IP{
+				IP: tg.IP,
+				// TODO: NetworkID: <infer network ID from IP CIDR>,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		wantedPool.Reals = append(wantedPool.Reals, networkapi.PoolMember{
+			IPID: netIP.ID,
+			Port: tg.Port,
+		})
+	}
+
+	vipPool, err := netapiCli.GetPool(ctx, r.poolName(ing))
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+
+	if networkapi.IsNotFound(err) {
+		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
+	} else if !reflect.DeepEqual(vipPool, wantedPool) {
+		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
+	}
+	if err != nil {
+		return err
+	}
+
+	vipIP, err := netapiCli.GetIPByName(ctx, r.vipName(ing))
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+	if networkapi.IsNotFound(err) {
+		// TODO: get vip environment id from annotations
+		vipIP, err = netapiCli.CreateVIPIPv4(ctx, r.vipName(ing), r.cfg.DefaultVIPEnvironmentID)
+	}
+	if err != nil {
+		return err
+	}
+
+	existingVIP, err := netapiCli.GetVIP(ctx, r.vipName(ing))
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+
+	wantedVIP := &networkapi.VIP{
+		Name:    r.vipName(ing),
+		IPv4ID:  vipIP.ID,
+		PoolIDs: []int{vipPool.ID},
+	}
+	if networkapi.IsNotFound(err) {
+		err = netapiCli.CreateVIP(ctx, wantedVIP)
+	} else if !reflect.DeepEqual(existingVIP, wantedVIP) {
+		err = netapiCli.UpdateVIP(ctx, wantedVIP)
+	}
+	if err != nil {
+		return err
+	}
+
+	ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
+		{
+			IP: vipIP.IP.String(),
+		},
+	}
+	return r.client.Status().Update(ctx, ing)
+}
+
 func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	log := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", request.NamespacedName.String())
 
@@ -210,73 +290,7 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 		return result, err
 	}
 
-	netapiCli := networkapi.Client()
-
-	wantedPool := &networkapi.Pool{
-		Name: r.poolName(ing),
-	}
-
-	for _, tg := range targets {
-		netIP, err := netapiCli.GetIP(ctx, tg.IP)
-		if err != nil && !networkapi.IsNotFound(err) {
-			return result, err
-		}
-		if networkapi.IsNotFound(err) {
-			netIP, err = netapiCli.CreateIP(ctx, &networkapi.IP{
-				IP: tg.IP,
-				// TODO: NetworkID: <infer network ID from IP CIDR>,
-			})
-		}
-		if err != nil {
-			return result, err
-		}
-		wantedPool.Reals = append(wantedPool.Reals, networkapi.PoolMember{
-			IPID: netIP.ID,
-			Port: tg.Port,
-		})
-	}
-
-	vipPool, err := netapiCli.GetPool(ctx, r.poolName(ing))
-	if err != nil && !networkapi.IsNotFound(err) {
-		return result, err
-	}
-
-	if networkapi.IsNotFound(err) {
-		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
-	} else if !reflect.DeepEqual(vipPool, wantedPool) {
-		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
-	}
-	if err != nil {
-		return result, err
-	}
-
-	vipIP, err := netapiCli.GetIPByName(ctx, r.vipName(ing))
-	if err != nil && !networkapi.IsNotFound(err) {
-		return result, err
-	}
-	if networkapi.IsNotFound(err) {
-		// TODO: get vip environment id from annotations
-		vipIP, err = netapiCli.CreateVIPIPv4(ctx, r.vipName(ing), r.cfg.DefaultVIPEnvironmentID)
-	}
-	if err != nil {
-		return result, err
-	}
-
-	existingVIP, err := netapiCli.GetVIP(ctx, r.vipName(ing))
-	if err != nil && !networkapi.IsNotFound(err) {
-		return result, err
-	}
-
-	wantedVIP := &networkapi.VIP{
-		Name:    r.vipName(ing),
-		IPv4ID:  vipIP.ID,
-		PoolIDs: []int{vipPool.ID},
-	}
-	if networkapi.IsNotFound(err) {
-		err = netapiCli.CreateVIP(ctx, wantedVIP)
-	} else if !reflect.DeepEqual(existingVIP, wantedVIP) {
-		err = netapiCli.UpdateVIP(ctx, wantedVIP)
-	}
+	err = r.reconcileNetworkAPI(ctx, ing, targets)
 	if err != nil {
 		return result, err
 	}
