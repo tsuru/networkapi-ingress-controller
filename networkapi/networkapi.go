@@ -1,74 +1,95 @@
 package networkapi
 
-import "net"
+import (
+	"context"
+	"net"
+)
 
 type VIP struct {
-	PoolIDs []string
+	Name          string
+	EnvironmentID int
+	IPv4ID        int
+	PoolIDs       []int
+}
+
+type PoolMember struct {
+	Port int
+	IPID int
 }
 
 type Pool struct {
-	ID    string
-	Reals []Equipment
+	ID    int
+	Name  string
+	Reals []PoolMember
 }
 
-type Equipment struct {
-	ID  string
-	IPs []EquipmentIP
-}
-
-type EquipmentIP struct {
-	EquipmentID string
-	Description string
-	IP          net.IP
+type IP struct {
+	ID        int
+	IP        net.IP
+	NetworkID int
 }
 
 type NetworkAPI interface {
-	GetVIP(id string) (*VIP, error)
-	CreateVIP(vip *VIP) error
-	GetPool(id string) (*Pool, error)
-	CreatePool(pool *Pool) error
-	CreateEquipment(equip *Equipment) error
-	GetEquipment(id string) (*Equipment, error)
-	CreateEquipmentIP(equipmentIP *EquipmentIP) error
-	SetReals(poolID string, reals []Equipment) error
+	GetVIP(ctx context.Context, name string) (*VIP, error)
+	CreateVIP(ctx context.Context, vip *VIP) error
+	UpdateVIP(ctx context.Context, vip *VIP) error
+	GetPool(ctx context.Context, name string) (*Pool, error)
+	CreatePool(ctx context.Context, pool *Pool) (*Pool, error)
+	UpdatePool(ctx context.Context, pool *Pool) (*Pool, error)
+	CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error)
+	CreateIP(ctx context.Context, ip *IP) (*IP, error)
+	GetIP(ctx context.Context, ip net.IP) (*IP, error)
+	GetIPByName(ctx context.Context, name string) (*IP, error)
 }
 
 type networkAPI struct{}
 
 var _ NetworkAPI = &networkAPI{}
 
-func (networkAPI) GetVIP(id string) (*VIP, error) {
+func (networkAPI) GetVIP(ctx context.Context, name string) (*VIP, error) {
 	return nil, nil
 }
 
-func (networkAPI) CreateVIP(vip *VIP) error {
+func (networkAPI) CreateVIP(ctx context.Context, vip *VIP) error {
 	return nil
 }
 
-func (networkAPI) GetPool(id string) (*Pool, error) {
+func (networkAPI) GetPool(ctx context.Context, name string) (*Pool, error) {
 	return nil, nil
 }
 
-func (networkAPI) CreatePool(pool *Pool) error {
-	return nil
-}
-
-func (networkAPI) CreateEquipment(equip *Equipment) error {
-	return nil
-}
-
-func (networkAPI) GetEquipment(id string) (*Equipment, error) {
+func (networkAPI) CreatePool(ctx context.Context, pool *Pool) (*Pool, error) {
 	return nil, nil
 }
 
-func (networkAPI) CreateEquipmentIP(equipmentIP *EquipmentIP) error {
+func (networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error) {
+	return nil, nil
+}
+
+func (networkAPI) UpdateVIP(ctx context.Context, vip *VIP) error {
 	return nil
 }
 
-func (networkAPI) SetReals(poolID string, reals []Equipment) error {
-	return nil
+func (networkAPI) UpdatePool(ctx context.Context, pool *Pool) (*Pool, error) {
+	return nil, nil
+}
+
+func (networkAPI) CreateIP(ctx context.Context, ip *IP) (*IP, error) {
+	return nil, nil
+}
+
+func (networkAPI) GetIP(ctx context.Context, ip net.IP) (*IP, error) {
+	return nil, nil
+}
+
+func (networkAPI) GetIPByName(ctx context.Context, name string) (*IP, error) {
+	return nil, nil
 }
 
 func Client() NetworkAPI {
 	return &networkAPI{}
+}
+
+func IsNotFound(err error) bool {
+	return false
 }

@@ -25,7 +25,7 @@ func run() error {
 		return errors.Wrap(err, "unable to set up overall controller manager")
 	}
 
-	ingressReconciler := &reconcileIngress{client: mgr.GetClient()}
+	ingressReconciler := NewReconciler(mgr.GetClient())
 
 	c, err := controller.New("foo-controller", mgr, controller.Options{
 		Reconciler: ingressReconciler,
