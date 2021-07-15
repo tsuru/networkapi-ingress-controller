@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/pkg/errors"
+	ingConfig "github.com/tsuru/networkapi-ingress-controller/config"
 	ingController "github.com/tsuru/networkapi-ingress-controller/controller"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -30,9 +31,15 @@ func run() error {
 		return errors.Wrap(err, "unable to set up overall controller manager")
 	}
 
+	cfg, err := ingConfig.Get()
+	if err != nil {
+		return errors.Wrap(err, "unable to read config")
+	}
+
 	ingressReconciler := ingController.NewReconciler(
 		mgr.GetClient(),
 		mgr.GetEventRecorderFor(controllerName),
+		cfg,
 	)
 
 	c, err := controller.New(controllerName, mgr, controller.Options{

@@ -33,10 +33,10 @@ type reconcileIngress struct {
 	events         record.EventRecorder
 }
 
-func NewReconciler(client client.Client, evtRecorder record.EventRecorder) *reconcileIngress {
+func NewReconciler(client client.Client, evtRecorder record.EventRecorder, cfg config.Config) *reconcileIngress {
 	return &reconcileIngress{
 		client: client,
-		cfg:    config.Get(),
+		cfg:    cfg,
 		events: evtRecorder,
 		serviceWatcher: &serviceWatcher{
 			ingressToService: map[types.NamespacedName]types.NamespacedName{},
@@ -50,6 +50,10 @@ func (r *reconcileIngress) vipName(ing *networkingv1.Ingress) string {
 
 func (r *reconcileIngress) poolName(ing *networkingv1.Ingress) string {
 	return fmt.Sprintf("%s_%s/%s/%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
+}
+
+func (r *reconcileIngress) targetName(tg target) string {
+	return fmt.Sprintf("%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, tg.IP.String())
 }
 
 func validateIngress(ing *networkingv1.Ingress) error {
@@ -115,6 +119,10 @@ func (r *reconcileIngress) svcAndPortFromIngress(ctx context.Context, ing *netwo
 		return nil, nil, errors.Wrap(err, "could not fetch backend service")
 	}
 
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		return nil, nil, errors.Errorf("backend service %s must not be external name type", svcFullName.String())
+	}
+
 	if len(svc.Spec.Ports) == 0 {
 		return nil, nil, errors.Errorf("backend service %s has no ports", svcFullName.String())
 	}
@@ -148,11 +156,25 @@ type target struct {
 	Port int
 }
 
-func (r *reconcileIngress) targetsForService(ctx context.Context, svcName types.NamespacedName, port *corev1.ServicePort) ([]target, error) {
+func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Service, port *corev1.ServicePort) ([]target, error) {
 	var targets []target
 
+	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
+			return targets, nil
+		}
+		ip := svc.Status.LoadBalancer.Ingress[0].IP
+		if ip != "" {
+			targets = append(targets, target{
+				IP:   net.ParseIP(ip),
+				Port: int(port.Port),
+			})
+		}
+		return targets, nil
+	}
+
 	var endpoints corev1.Endpoints
-	err := r.client.Get(ctx, svcName, &endpoints)
+	err := r.client.Get(ctx, namespacedName(svc), &endpoints)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not fetch endpoints")
 	}
@@ -185,22 +207,22 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, svcName types.
 }
 
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
-	netapiCli := networkapi.Client()
+	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
 	wantedPool := &networkapi.Pool{
 		Name: r.poolName(ing),
 	}
 
 	for _, tg := range targets {
-		netIP, err := netapiCli.GetIP(ctx, tg.IP)
+		netIP, err := netapiCli.GetIPByNetIP(ctx, tg.IP)
 		if err != nil && !networkapi.IsNotFound(err) {
 			return err
 		}
 		if networkapi.IsNotFound(err) {
-			netIP, err = netapiCli.CreateIP(ctx, &networkapi.IP{
-				IP: tg.IP,
-				// TODO: NetworkID: <infer network ID from IP CIDR>,
-			})
+			ip := networkapi.IPFromNetIP(tg.IP)
+			ip.NetworkIPv4ID = r.cfg.PodNetworkID
+			ip.Description = r.targetName(tg)
+			netIP, err = netapiCli.CreateIP(ctx, &ip)
 		}
 		if err != nil {
 			return err
@@ -258,7 +280,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 
 	ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
 		{
-			IP: vipIP.IP.String(),
+			IP: vipIP.ToNetIP().String(),
 		},
 	}
 	return r.client.Status().Update(ctx, ing)
@@ -280,7 +302,7 @@ func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networking
 	}
 	r.serviceWatcher.addIngressService(namespacedName(ing), namespacedName(svc))
 
-	targets, err := r.targetsForService(ctx, namespacedName(svc), port)
+	targets, err := r.targetsForService(ctx, svc, port)
 	if err != nil {
 		return result, err
 	}
