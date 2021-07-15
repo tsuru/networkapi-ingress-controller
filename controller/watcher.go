@@ -24,7 +24,7 @@ type serviceWatcher struct {
 func (w *serviceWatcher) mapFunc(obj client.Object) []reconcile.Request {
 	w.RLock()
 	defer w.RUnlock()
-	fullName := types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+	fullName := namespacedName(obj)
 	var reqs []reconcile.Request
 	for ing, svc := range w.ingressToService {
 		if svc == fullName {

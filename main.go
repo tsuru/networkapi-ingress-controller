@@ -18,6 +18,10 @@ func init() {
 	log.SetLogger(zap.New())
 }
 
+const (
+	controllerName = "networkapi-ingress-controller"
+)
+
 func run() error {
 	entryLog := log.Log.WithName("run")
 
@@ -26,9 +30,12 @@ func run() error {
 		return errors.Wrap(err, "unable to set up overall controller manager")
 	}
 
-	ingressReconciler := ingController.NewReconciler(mgr.GetClient())
+	ingressReconciler := ingController.NewReconciler(
+		mgr.GetClient(),
+		mgr.GetEventRecorderFor(controllerName),
+	)
 
-	c, err := controller.New("foo-controller", mgr, controller.Options{
+	c, err := controller.New(controllerName, mgr, controller.Options{
 		Reconciler: ingressReconciler,
 	})
 	if err != nil {

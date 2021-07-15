@@ -12,7 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -28,13 +30,17 @@ type reconcileIngress struct {
 	client         client.Client
 	serviceWatcher *serviceWatcher
 	cfg            config.Config
+	events         record.EventRecorder
 }
 
-func NewReconciler(client client.Client) *reconcileIngress {
+func NewReconciler(client client.Client, evtRecorder record.EventRecorder) *reconcileIngress {
 	return &reconcileIngress{
-		client:         client,
-		cfg:            config.Get(),
-		serviceWatcher: &serviceWatcher{},
+		client: client,
+		cfg:    config.Get(),
+		events: evtRecorder,
+		serviceWatcher: &serviceWatcher{
+			ingressToService: map[types.NamespacedName]types.NamespacedName{},
+		},
 	}
 }
 
@@ -84,6 +90,13 @@ func backendFromIngress(ing *networkingv1.Ingress) *networkingv1.IngressServiceB
 		return ing.Spec.DefaultBackend.Service
 	}
 	return nil
+}
+
+func namespacedName(obj metav1.Object) types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: obj.GetNamespace(),
+		Name:      obj.GetName(),
+	}
 }
 
 func (r *reconcileIngress) svcAndPortFromIngress(ctx context.Context, ing *networkingv1.Ingress) (*corev1.Service, *corev1.ServicePort, error) {
@@ -251,6 +264,31 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 	return r.client.Status().Update(ctx, ing)
 }
 
+func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networkingv1.Ingress) (reconcile.Result, error) {
+	log := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", namespacedName(ing))
+	log.Info("Reconciling Ingress")
+	result := reconcile.Result{}
+
+	err := validateIngress(ing)
+	if err != nil {
+		return result, err
+	}
+
+	svc, port, err := r.svcAndPortFromIngress(ctx, ing)
+	if err != nil {
+		return result, err
+	}
+	r.serviceWatcher.addIngressService(namespacedName(ing), namespacedName(svc))
+
+	targets, err := r.targetsForService(ctx, namespacedName(svc), port)
+	if err != nil {
+		return result, err
+	}
+
+	err = r.reconcileNetworkAPI(ctx, ing, targets)
+	return result, err
+}
+
 func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	log := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", request.NamespacedName.String())
 
@@ -267,33 +305,13 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 		return result, errors.Wrap(err, "could not fetch Ingress")
 	}
 
-	log.Info("Reconciling Ingress")
-
-	err = validateIngress(ing)
+	r.events.Event(ing, corev1.EventTypeNormal, "NetworkAPIIngressReconciling", "Ingress reconciling")
+	result, err = r.reconcileIngress(ctx, ing)
 	if err != nil {
+		r.events.Eventf(ing, corev1.EventTypeWarning, "NetworkAPIIngressReconcileFailed", "Failed to reconcile Ingress: %v", err)
 		return result, err
 	}
-
-	svc, port, err := r.svcAndPortFromIngress(ctx, ing)
-	if err != nil {
-		return result, err
-	}
-
-	svcName := types.NamespacedName{
-		Namespace: svc.Namespace,
-		Name:      svc.Name,
-	}
-	r.serviceWatcher.addIngressService(request.NamespacedName, svcName)
-
-	targets, err := r.targetsForService(ctx, svcName, port)
-	if err != nil {
-		return result, err
-	}
-
-	err = r.reconcileNetworkAPI(ctx, ing, targets)
-	if err != nil {
-		return result, err
-	}
+	r.events.Event(ing, corev1.EventTypeNormal, "NetworkAPIIngressReconciled", "Ingress reconciled")
 
 	result.RequeueAfter = r.cfg.ReconcileInterval
 	return result, nil
