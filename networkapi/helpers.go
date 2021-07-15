@@ -7,10 +7,7 @@ import (
 )
 
 func unmarshalIDs(data []byte) ([]int, error) {
-	type idOnly struct {
-		ID int `json:"id,omitempty"`
-	}
-	var ids []idOnly
+	var ids []IDOnly
 	err := json.Unmarshal(data, &ids)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to unmarshal ids from %q", string(data))

@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"reflect"
 
 	"github.com/pkg/errors"
 	"github.com/tsuru/networkapi-ingress-controller/config"
-	"github.com/tsuru/networkapi-ingress-controller/networkapi"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
@@ -152,8 +150,9 @@ func (r *reconcileIngress) svcAndPortFromIngress(ctx context.Context, ing *netwo
 }
 
 type target struct {
-	IP   net.IP
-	Port int
+	IP        net.IP
+	Port      int
+	NetworkID int
 }
 
 func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Service, port *corev1.ServicePort) ([]target, error) {
@@ -166,8 +165,9 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Se
 		ip := svc.Status.LoadBalancer.Ingress[0].IP
 		if ip != "" {
 			targets = append(targets, target{
-				IP:   net.ParseIP(ip),
-				Port: int(port.Port),
+				IP:        net.ParseIP(ip),
+				Port:      int(port.Port),
+				NetworkID: r.cfg.LBNetworkID,
 			})
 		}
 		return targets, nil
@@ -198,92 +198,16 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Se
 		for _, address := range subset.Addresses {
 			ip := net.ParseIP(address.IP)
 			if ip != nil {
-				targets = append(targets, target{IP: ip, Port: portNumber})
+				targets = append(targets, target{
+					IP:        ip,
+					Port:      portNumber,
+					NetworkID: r.cfg.PodNetworkID,
+				})
 			}
 		}
 	}
 
 	return targets, nil
-}
-
-func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
-	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
-
-	wantedPool := &networkapi.Pool{
-		Name: r.poolName(ing),
-	}
-
-	for _, tg := range targets {
-		netIP, err := netapiCli.GetIPByNetIP(ctx, tg.IP)
-		if err != nil && !networkapi.IsNotFound(err) {
-			return err
-		}
-		if networkapi.IsNotFound(err) {
-			ip := networkapi.IPFromNetIP(tg.IP)
-			ip.NetworkIPv4ID = r.cfg.PodNetworkID
-			ip.Description = r.targetName(tg)
-			netIP, err = netapiCli.CreateIP(ctx, &ip)
-		}
-		if err != nil {
-			return err
-		}
-		wantedPool.Reals = append(wantedPool.Reals, networkapi.PoolMember{
-			IPID: netIP.ID,
-			Port: tg.Port,
-		})
-	}
-
-	vipPool, err := netapiCli.GetPool(ctx, r.poolName(ing))
-	if err != nil && !networkapi.IsNotFound(err) {
-		return err
-	}
-
-	if networkapi.IsNotFound(err) {
-		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
-	} else if !reflect.DeepEqual(vipPool, wantedPool) {
-		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
-	}
-	if err != nil {
-		return err
-	}
-
-	vipIP, err := netapiCli.GetIPByName(ctx, r.vipName(ing))
-	if err != nil && !networkapi.IsNotFound(err) {
-		return err
-	}
-	if networkapi.IsNotFound(err) {
-		// TODO: get vip environment id from annotations
-		vipIP, err = netapiCli.CreateVIPIPv4(ctx, r.vipName(ing), r.cfg.DefaultVIPEnvironmentID)
-	}
-	if err != nil {
-		return err
-	}
-
-	existingVIP, err := netapiCli.GetVIP(ctx, r.vipName(ing))
-	if err != nil && !networkapi.IsNotFound(err) {
-		return err
-	}
-
-	wantedVIP := &networkapi.VIP{
-		Name:    r.vipName(ing),
-		IPv4ID:  vipIP.ID,
-		PoolIDs: []int{vipPool.ID},
-	}
-	if networkapi.IsNotFound(err) {
-		err = netapiCli.CreateVIP(ctx, wantedVIP)
-	} else if !reflect.DeepEqual(existingVIP, wantedVIP) {
-		err = netapiCli.UpdateVIP(ctx, wantedVIP)
-	}
-	if err != nil {
-		return err
-	}
-
-	ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
-		{
-			IP: vipIP.ToNetIP().String(),
-		},
-	}
-	return r.client.Status().Update(ctx, ing)
 }
 
 func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networkingv1.Ingress) (reconcile.Result, error) {
@@ -311,13 +235,20 @@ func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networking
 	return result, err
 }
 
-func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Request) (result reconcile.Result, err error) {
 	log := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", request.NamespacedName.String())
 
-	result := reconcile.Result{}
+	if r.cfg.DebugReconcileOnce {
+		defer func() {
+			if err != nil {
+				log.Error(err, "Failed to reconcile Ingress")
+			}
+			panic("DebugReconcileOnce is enabled")
+		}()
+	}
 
 	ing := &networkingv1.Ingress{}
-	err := r.client.Get(ctx, request.NamespacedName, ing)
+	err = r.client.Get(ctx, request.NamespacedName, ing)
 	if k8sErrors.IsNotFound(err) {
 		log.Error(nil, "Could not find Ingress")
 		r.serviceWatcher.removeIngress(request.NamespacedName)
@@ -336,5 +267,6 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 	r.events.Event(ing, corev1.EventTypeNormal, "NetworkAPIIngressReconciled", "Ingress reconciled")
 
 	result.RequeueAfter = r.cfg.ReconcileInterval
+
 	return result, nil
 }

@@ -20,7 +20,17 @@ type Config struct {
 	IngressClassName        string
 	DefaultVIPEnvironmentID int
 	PodNetworkID            int
+	LBNetworkID             int
 	ReconcileInterval       time.Duration
+	Equipment               EquipmentConfig
+	DebugReconcileOnce      bool
+}
+
+type EquipmentConfig struct {
+	Type        int
+	Model       int
+	Group       int
+	Environment int
 }
 
 func (cfg Config) validate() error {
@@ -33,11 +43,26 @@ func (cfg Config) validate() error {
 	if cfg.PodNetworkID == 0 {
 		return errors.New("podNetworkID cannot be empty")
 	}
+	if cfg.LBNetworkID == 0 {
+		return errors.New("lbNetworkID cannot be empty")
+	}
 	if cfg.ReconcileInterval < 1*time.Minute {
 		return errors.New("reconcileInterval cannot be less than 1 minute")
 	}
 	if cfg.NetworkAPIURL == "" {
-		return errors.New("NetworkAPIURL cannot be empty")
+		return errors.New("networkAPIURL cannot be empty")
+	}
+	if cfg.Equipment.Type == 0 {
+		return errors.New("equipment.type cannot be empty")
+	}
+	if cfg.Equipment.Model == 0 {
+		return errors.New("equipment.model cannot be empty")
+	}
+	if cfg.Equipment.Group == 0 {
+		return errors.New("equipment.group cannot be empty")
+	}
+	if cfg.Equipment.Environment == 0 {
+		return errors.New("equipment.environment cannot be empty")
 	}
 	return nil
 }

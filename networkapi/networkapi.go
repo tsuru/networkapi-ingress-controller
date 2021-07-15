@@ -3,10 +3,12 @@ package networkapi
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/pkg/errors"
 )
@@ -32,13 +34,34 @@ type Pool struct {
 }
 
 type IP struct {
-	ID            int    `json:"id,omitempty"`
-	Oct1          byte   `json:"oct1,omitempty"`
-	Oct2          byte   `json:"oct2,omitempty"`
-	Oct3          byte   `json:"oct3,omitempty"`
-	Oct4          byte   `json:"oct4,omitempty"`
-	NetworkIPv4ID int    `json:"networkipv4,omitempty"`
-	Description   string `json:"description,omitempty"`
+	ID            int      `json:"id,omitempty"`
+	Oct1          byte     `json:"oct1,omitempty"`
+	Oct2          byte     `json:"oct2,omitempty"`
+	Oct3          byte     `json:"oct3,omitempty"`
+	Oct4          byte     `json:"oct4,omitempty"`
+	NetworkIPv4ID int      `json:"networkipv4,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Equipments    []IDOnly `json:"equipments,omitempty"`
+}
+
+type IDOnly struct {
+	ID int `json:"id,omitempty"`
+}
+
+type Environment struct {
+	Environment  int  `json:"environment"`
+	IsRouter     bool `json:"is_router"`
+	IsController bool `json:"is_controller"`
+}
+
+type Equipment struct {
+	ID            int           `json:"id,omitempty"`
+	Name          string        `json:"name,omitempty"`
+	EquipmentType int           `json:"equipment_type,omitempty"`
+	Model         int           `json:"model,omitempty"`
+	Environments  []Environment `json:"environments,omitempty"`
+	Groups        []IDOnly      `json:"groups,omitempty"`
+	Maintenance   bool          `json:"maintenance"`
 }
 
 func IPFromNetIP(netIP net.IP) IP {
@@ -66,6 +89,8 @@ type NetworkAPI interface {
 	CreateIP(ctx context.Context, ip *IP) (*IP, error)
 	GetIPByName(ctx context.Context, name string) (*IP, error)
 	GetIPByNetIP(ctx context.Context, ip net.IP) (*IP, error)
+	CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error)
+	GetEquipment(ctx context.Context, name string) (*Equipment, error)
 }
 
 type networkAPI struct {
@@ -91,7 +116,26 @@ func (n *networkAPI) CreatePool(ctx context.Context, pool *Pool) (*Pool, error) 
 }
 
 func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error) {
-	return nil, nil
+	const vipIPRequestTpl = `<?xml version="1.0" encoding="UTF-8"?><networkapi versao="1.0"><ip_map><id_evip>%d</id_evip><name>%s</name></ip_map></networkapi>`
+	body := fmt.Sprintf(vipIPRequestTpl, vipEnvironmentID, name)
+	data, err := n.doRequest(ctx, http.MethodPost, "/invalid/ip/availableip4/vip/", nil, []byte(body))
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	err = xml.Unmarshal(data, &result)
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to unmarshal %q", string(data))
+	}
+	if ipRaw, ok := result["ip"]; ok {
+		if ip, ok := ipRaw.(map[string]interface{}); ok {
+			ipID, _ := strconv.Atoi(fmt.Sprintf("%v", ip["id"]))
+			if ipID != 0 {
+				return n.getIPByID(ctx, ipID)
+			}
+		}
+	}
+	return nil, errors.Errorf("unable to parse ID from %#v", result)
 }
 
 func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) error {
@@ -100,6 +144,49 @@ func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) error {
 
 func (n *networkAPI) UpdatePool(ctx context.Context, pool *Pool) (*Pool, error) {
 	return nil, nil
+}
+
+func (n *networkAPI) CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error) {
+	body, err := marshalField("equipments", []interface{}{equip})
+	if err != nil {
+		return nil, err
+	}
+	data, err := n.doRequest(ctx, http.MethodPost, "/api/v4/equipment/", nil, body)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := unmarshalIDs(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, errors.Errorf("no equipments created: %s", string(data))
+	}
+	if len(ids) > 1 {
+		return nil, errors.Errorf("multiple equipments created: %s", string(data))
+	}
+	return n.GetEquipment(ctx, equip.Name)
+}
+
+func (n *networkAPI) GetEquipment(ctx context.Context, name string) (*Equipment, error) {
+	data, err := n.doRequest(ctx, http.MethodGet, "/api/v4/equipment/", url.Values{
+		"name": []string{name},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result []Equipment
+	err = unmarshalField(data, "equipments", &result)
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, errNotFound
+	}
+	if len(result) > 1 {
+		return nil, errors.Errorf("multiple equipments found when one was expected: %#v", result)
+	}
+	return &result[0], nil
 }
 
 func (n *networkAPI) CreateIP(ctx context.Context, ip *IP) (*IP, error) {

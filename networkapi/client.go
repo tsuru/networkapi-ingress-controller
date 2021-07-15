@@ -58,7 +58,7 @@ func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return nil, errors.Errorf("invalid response %d: %s", resp.StatusCode, string(rspData))
+		return nil, errors.Errorf("invalid response %d for %s %s with body %s: %s", resp.StatusCode, method, fullURL, string(bodyData), string(rspData))
 	}
 
 	return rspData, nil
