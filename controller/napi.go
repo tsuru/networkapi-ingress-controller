@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	"github.com/tsuru/networkapi-ingress-controller/config"
 	"github.com/tsuru/networkapi-ingress-controller/networkapi"
@@ -37,11 +36,11 @@ func newEquipment(name string, cfg config.Config) *networkapi.Equipment {
 	}
 }
 
-func newPool(name string, cfg config.Config, ing *networkingv1.Ingress) *networkapi.Pool {
+func newPool(name string, cfg config.Config) *networkapi.Pool {
 	return &networkapi.Pool{
 		Identifier:        name,
 		DefaultPort:       80,
-		Environment:       networkapi.IntOrID{ID: cfg.Equipment.Environment},
+		Environment:       networkapi.IntOrID{ID: cfg.DefaultPoolEnvironmentID},
 		ServiceDownAction: networkapi.ServiceDownAction{Name: "none"},
 		LBMethod:          "round-robin",
 		HealthCheck: networkapi.HealthCheck{
@@ -52,10 +51,41 @@ func newPool(name string, cfg config.Config, ing *networkingv1.Ingress) *network
 	}
 }
 
+func newVIP(name string, cfg config.Config, vip *networkapi.IP, pool *networkapi.Pool) *networkapi.VIP {
+	return &networkapi.VIP{
+		Name:           name,
+		Service:        name,
+		Business:       "tsuru gke",
+		EnvironmentVIP: networkapi.IntOrID{ID: cfg.DefaultVIPEnvironmentID},
+		IPv4:           &networkapi.IntOrID{ID: vip.ID},
+		Ports: []networkapi.VIPPort{
+			{
+				Port: 80,
+				Pools: []networkapi.VIPPool{
+					{
+						ServerPool: networkapi.IntOrID{ID: pool.ID},
+						L7Rule:     networkapi.IntOrID{ID: cfg.DefaultVIPL7RuleID},
+					},
+				},
+				Options: networkapi.VIPPortOptions{
+					L4Protocol: networkapi.IntOrID{ID: cfg.DefaultVIPL4ProtocolID},
+					L7Protocol: networkapi.IntOrID{ID: cfg.DefaultVIPL7ProtocolID},
+				},
+			},
+		},
+		Options: networkapi.VIPOptions{
+			CacheGroup:    networkapi.IntOrID{ID: cfg.DefaultCacheGroupID},
+			TrafficReturn: networkapi.IntOrID{ID: cfg.DefaultTrafficReturnID},
+			Persistence:   networkapi.IntOrID{ID: cfg.DefaultPersistenceID},
+			Timeout:       networkapi.IntOrID{ID: cfg.DefaultTimeoutID},
+		},
+	}
+}
+
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
 	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
-	wantedPool := newPool(r.poolName(ing), r.cfg, ing)
+	wantedPool := newPool(r.poolName(ing), r.cfg)
 
 	for _, tg := range targets {
 		targetName := r.targetName(tg)
@@ -118,20 +148,16 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
-	existingVIP, err := netapiCli.GetVIP(ctx, r.vipName(ing))
+	vip, err := netapiCli.GetVIP(ctx, r.vipName(ing))
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}
 
-	wantedVIP := &networkapi.VIP{
-		Name:    r.vipName(ing),
-		IPv4ID:  vipIP.ID,
-		PoolIDs: []int{vipPool.ID},
-	}
+	wantedVIP := newVIP(r.vipName(ing), r.cfg, vipIP, vipPool)
 	if networkapi.IsNotFound(err) {
-		err = netapiCli.CreateVIP(ctx, wantedVIP)
-	} else if !reflect.DeepEqual(existingVIP, wantedVIP) {
-		err = netapiCli.UpdateVIP(ctx, wantedVIP)
+		vip, err = netapiCli.CreateVIP(ctx, wantedVIP)
+	} else if !vip.DeepEqual(*wantedVIP) {
+		vip, err = netapiCli.UpdateVIP(ctx, wantedVIP)
 	}
 	if err != nil {
 		return err

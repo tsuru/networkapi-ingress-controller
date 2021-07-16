@@ -70,5 +70,34 @@ func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs 
 	}
 
 	return rspData, nil
+}
 
+func (n *baseClient) doPostOrPut(ctx context.Context, urlName, reqName string, obj interface{}, existingID int) (int, error) {
+	body, err := marshalField(reqName, []interface{}{obj})
+	if err != nil {
+		return 0, err
+	}
+	var u string
+	method := http.MethodPost
+	if existingID == 0 {
+		u = fmt.Sprintf("/api/v3/%s/", urlName)
+	} else {
+		u = fmt.Sprintf("/api/v3/%s/%d/", urlName, existingID)
+		method = http.MethodPut
+	}
+	data, err := n.doRequest(ctx, method, u, nil, body)
+	if err != nil {
+		return 0, err
+	}
+	ids, err := unmarshalIDs(data)
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, errors.Errorf("no %s created: %s", reqName, string(data))
+	}
+	if len(ids) > 1 {
+		return 0, errors.Errorf("multiple %s created: %s", reqName, string(data))
+	}
+	return ids[0], nil
 }

@@ -16,10 +16,62 @@ import (
 var errNotFound = errors.New("not found")
 
 type VIP struct {
-	Name          string
-	EnvironmentID int
-	IPv4ID        int
-	PoolIDs       []int
+	ID             int        `json:"id,omitempty"`
+	Name           string     `json:"name,omitempty"`
+	Service        string     `json:"service,omitempty"`
+	Business       string     `json:"business,omitempty"`
+	EnvironmentVIP IntOrID    `json:"environmentvip,omitempty"`
+	IPv4           *IntOrID   `json:"ipv4"`
+	IPv6           *IntOrID   `json:"ipv6"`
+	Ports          []VIPPort  `json:"ports,omitempty"`
+	Options        VIPOptions `json:"options,omitempty"`
+}
+
+func (v1 VIP) DeepEqual(v2 VIP) bool {
+	v1.ID = 0
+	v2.ID = 0
+	return reflect.DeepEqual(v1, v2)
+}
+
+type VIPPort struct {
+	Port    int            `json:"port,omitempty"`
+	Pools   []VIPPool      `json:"pools,omitempty"`
+	Options VIPPortOptions `json:"options,omitempty"`
+}
+
+type VIPOptions struct {
+	CacheGroup    IntOrID `json:"cache_group"`
+	TrafficReturn IntOrID `json:"traffic_return"`
+	Persistence   IntOrID `json:"persistence"`
+	Timeout       IntOrID `json:"timeout"`
+}
+
+type VIPPool struct {
+	ServerPool IntOrID `json:"server_pool,omitempty"`
+	L7Rule     IntOrID `json:"l7_rule"`
+}
+
+type VIPPortOptions struct {
+	L4Protocol IntOrID `json:"l4_protocol,omitempty"`
+	L7Protocol IntOrID `json:"l7_protocol,omitempty"`
+}
+
+type Pool struct {
+	ID                int               `json:"id,omitempty"`
+	Identifier        string            `json:"identifier,omitempty"`
+	DefaultPort       int               `json:"default_port,omitempty"`
+	Environment       IntOrID           `json:"environment,omitempty"`
+	ServiceDownAction ServiceDownAction `json:"servicedownaction,omitempty"`
+	LBMethod          string            `json:"lb_method,omitempty"`
+	HealthCheck       HealthCheck       `json:"healthcheck,omitempty"`
+	DefaultLimit      int               `json:"default_limit"`
+	Members           []PoolMember      `json:"server_pool_members,omitempty"`
+}
+
+func (p1 Pool) DeepEqual(p2 Pool) bool {
+	p1.ID = 0
+	p2.ID = 0
+	return reflect.DeepEqual(p1, p2)
 }
 
 type PoolMemberIP struct {
@@ -72,24 +124,6 @@ func (v IntOrID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.ID)
 }
 
-type Pool struct {
-	ID                int               `json:"id,omitempty"`
-	Identifier        string            `json:"identifier,omitempty"`
-	DefaultPort       int               `json:"default_port,omitempty"`
-	Environment       IntOrID           `json:"environment,omitempty"`
-	ServiceDownAction ServiceDownAction `json:"servicedownaction,omitempty"`
-	LBMethod          string            `json:"lb_method,omitempty"`
-	HealthCheck       HealthCheck       `json:"healthcheck,omitempty"`
-	DefaultLimit      int               `json:"default_limit"`
-	Members           []PoolMember      `json:"server_pool_members,omitempty"`
-}
-
-func (p1 Pool) DeepEqual(p2 Pool) bool {
-	p1.ID = 0
-	p2.ID = 0
-	return reflect.DeepEqual(p1, p2)
-}
-
 type IP struct {
 	ID            int      `json:"id,omitempty"`
 	Oct1          byte     `json:"oct1,omitempty"`
@@ -137,8 +171,8 @@ func (ip *IP) ToNetIP() net.IP {
 
 type NetworkAPI interface {
 	GetVIP(ctx context.Context, name string) (*VIP, error)
-	CreateVIP(ctx context.Context, vip *VIP) error
-	UpdateVIP(ctx context.Context, vip *VIP) error
+	CreateVIP(ctx context.Context, vip *VIP) (*VIP, error)
+	UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error)
 	GetPool(ctx context.Context, name string) (*Pool, error)
 	CreatePool(ctx context.Context, pool *Pool) (*Pool, error)
 	UpdatePool(ctx context.Context, pool *Pool) (*Pool, error)
@@ -156,16 +190,65 @@ type networkAPI struct {
 
 var _ NetworkAPI = &networkAPI{}
 
+func parseVIP(data []byte) (*VIP, error) {
+	var result []VIP
+	err := unmarshalField(data, "vips", &result)
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, errNotFound
+	}
+	if len(result) > 1 {
+		return nil, errors.Errorf("multiple vips found when one was expected: %#v", result)
+	}
+	return &result[0], nil
+}
+
 func (n *networkAPI) GetVIP(ctx context.Context, name string) (*VIP, error) {
-	return nil, nil
+	search, err := json.Marshal(map[string]interface{}{
+		"extends_search": []interface{}{
+			map[string]string{"name": name},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	data, err := n.doRequest(ctx, http.MethodGet, "/api/v3/vip-request/", url.Values{
+		"search": []string{string(search)},
+		"kind":   []string{"details"},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseVIP(data)
 }
 
-func (n *networkAPI) CreateVIP(ctx context.Context, vip *VIP) error {
-	return nil
+func (n *networkAPI) getVIPByID(ctx context.Context, id int) (*VIP, error) {
+	u := fmt.Sprintf("/api/v3/vip-request/%d/", id)
+	data, err := n.doRequest(ctx, http.MethodGet, u, url.Values{
+		"kind": []string{"details"},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseVIP(data)
 }
 
-func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) error {
-	return nil
+func (n *networkAPI) CreateVIP(ctx context.Context, vip *VIP) (*VIP, error) {
+	id, err := n.doPostOrPut(ctx, "vip-request", "vips", vip, 0)
+	if err != nil {
+		return nil, err
+	}
+	return n.getVIPByID(ctx, id)
+}
+
+func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error) {
+	id, err := n.doPostOrPut(ctx, "vip-request", "vips", vip, vip.ID)
+	if err != nil {
+		return nil, err
+	}
+	return n.getVIPByID(ctx, id)
 }
 
 func parsePool(data []byte) (*Pool, error) {
@@ -215,48 +298,19 @@ func (n *networkAPI) getPoolByID(ctx context.Context, id int) (*Pool, error) {
 }
 
 func (n *networkAPI) CreatePool(ctx context.Context, pool *Pool) (*Pool, error) {
-	body, err := marshalField("server_pools", []interface{}{pool})
+	id, err := n.doPostOrPut(ctx, "pool", "server_pools", pool, 0)
 	if err != nil {
 		return nil, err
 	}
-	data, err := n.doRequest(ctx, http.MethodPost, "/api/v3/pool/", nil, body)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := unmarshalIDs(data)
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return nil, errors.Errorf("no pools created: %s", string(data))
-	}
-	if len(ids) > 1 {
-		return nil, errors.Errorf("multiple pools created: %s", string(data))
-	}
-	return n.getPoolByID(ctx, ids[0])
+	return n.getPoolByID(ctx, id)
 }
 
 func (n *networkAPI) UpdatePool(ctx context.Context, pool *Pool) (*Pool, error) {
-	body, err := marshalField("server_pools", []interface{}{pool})
+	id, err := n.doPostOrPut(ctx, "pool", "server_pools", pool, pool.ID)
 	if err != nil {
 		return nil, err
 	}
-	u := fmt.Sprintf("/api/v4/pool/%d/", pool.ID)
-	data, err := n.doRequest(ctx, http.MethodPut, u, nil, body)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := unmarshalIDs(data)
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return nil, errors.Errorf("no pools created: %s", string(data))
-	}
-	if len(ids) > 1 {
-		return nil, errors.Errorf("multiple pools created: %s", string(data))
-	}
-	return n.getPoolByID(ctx, ids[0])
+	return n.getPoolByID(ctx, id)
 }
 
 func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error) {
@@ -282,23 +336,9 @@ func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironm
 }
 
 func (n *networkAPI) CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error) {
-	body, err := marshalField("equipments", []interface{}{equip})
+	_, err := n.doPostOrPut(ctx, "equipment", "equipments", equip, 0)
 	if err != nil {
 		return nil, err
-	}
-	data, err := n.doRequest(ctx, http.MethodPost, "/api/v4/equipment/", nil, body)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := unmarshalIDs(data)
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return nil, errors.Errorf("no equipments created: %s", string(data))
-	}
-	if len(ids) > 1 {
-		return nil, errors.Errorf("multiple equipments created: %s", string(data))
 	}
 	return n.GetEquipment(ctx, equip.Name)
 }
@@ -325,25 +365,11 @@ func (n *networkAPI) GetEquipment(ctx context.Context, name string) (*Equipment,
 }
 
 func (n *networkAPI) CreateIP(ctx context.Context, ip *IP) (*IP, error) {
-	body, err := marshalField("ips", []interface{}{ip})
+	id, err := n.doPostOrPut(ctx, "ipv4", "ips", ip, 0)
 	if err != nil {
 		return nil, err
 	}
-	data, err := n.doRequest(ctx, http.MethodPost, "/api/v3/ipv4/", nil, body)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := unmarshalIDs(data)
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return nil, errors.Errorf("no IP created: %s", string(data))
-	}
-	if len(ids) > 1 {
-		return nil, errors.Errorf("multiple IPs created: %s", string(data))
-	}
-	return n.getIPByID(ctx, ids[0])
+	return n.getIPByID(ctx, id)
 }
 
 func parseIP(data []byte) (*IP, error) {

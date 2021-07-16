@@ -13,18 +13,26 @@ const (
 )
 
 type Config struct {
-	LogLevel                int
-	NetworkAPIURL           string
-	NetworkAPIUsername      string
-	NetworkAPIPassword      string
-	ClusterName             string
-	IngressClassName        string
-	DefaultVIPEnvironmentID int
-	PodNetworkID            int
-	LBNetworkID             int
-	ReconcileInterval       time.Duration
-	Equipment               EquipmentConfig
-	DebugReconcileOnce      bool
+	LogLevel                 int
+	NetworkAPIURL            string
+	NetworkAPIUsername       string
+	NetworkAPIPassword       string
+	ClusterName              string
+	IngressClassName         string
+	PodNetworkID             int
+	LBNetworkID              int
+	ReconcileInterval        time.Duration
+	Equipment                EquipmentConfig
+	DefaultVIPEnvironmentID  int
+	DefaultPoolEnvironmentID int
+	DefaultCacheGroupID      int
+	DefaultTrafficReturnID   int
+	DefaultTimeoutID         int
+	DefaultPersistenceID     int
+	DefaultVIPL7RuleID       int
+	DefaultVIPL4ProtocolID   int
+	DefaultVIPL7ProtocolID   int
+	DebugReconcileOnce       bool
 }
 
 type EquipmentConfig struct {
@@ -38,9 +46,6 @@ func (cfg Config) validate() error {
 	if cfg.ClusterName == "" {
 		return errors.New("clusterName cannot be empty")
 	}
-	if cfg.DefaultVIPEnvironmentID == 0 {
-		return errors.New("defaultVIPEnvironmentID cannot be empty")
-	}
 	if cfg.PodNetworkID == 0 {
 		return errors.New("podNetworkID cannot be empty")
 	}
@@ -52,6 +57,33 @@ func (cfg Config) validate() error {
 	}
 	if cfg.NetworkAPIURL == "" {
 		return errors.New("networkAPIURL cannot be empty")
+	}
+	if cfg.DefaultVIPEnvironmentID == 0 {
+		return errors.New("defaultVIPEnvironmentID cannot be empty")
+	}
+	if cfg.DefaultPoolEnvironmentID == 0 {
+		return errors.New("defaultPoolEnvironmentID cannot be empty")
+	}
+	if cfg.DefaultCacheGroupID == 0 {
+		return errors.New("defaultCacheGroupID cannot be empty")
+	}
+	if cfg.DefaultTrafficReturnID == 0 {
+		return errors.New("defaultTrafficReturnID cannot be empty")
+	}
+	if cfg.DefaultTimeoutID == 0 {
+		return errors.New("defaultTimeoutID cannot be empty")
+	}
+	if cfg.DefaultPersistenceID == 0 {
+		return errors.New("defaultPersistenceID cannot be empty")
+	}
+	if cfg.DefaultVIPL7RuleID == 0 {
+		return errors.New("defaultVIPL7RuleID cannot be empty")
+	}
+	if cfg.DefaultVIPL4ProtocolID == 0 {
+		return errors.New("defaultVIPL4ProtocolID cannot be empty")
+	}
+	if cfg.DefaultVIPL7ProtocolID == 0 {
+		return errors.New("defaultVIPL7ProtocolID cannot be empty")
 	}
 	if cfg.Equipment.Type == 0 {
 		return errors.New("equipment.type cannot be empty")
