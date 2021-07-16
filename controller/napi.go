@@ -8,14 +8,15 @@ import (
 	"github.com/tsuru/networkapi-ingress-controller/networkapi"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
-func (r *reconcileIngress) vipName(ing *networkingv1.Ingress) string {
+func (r *reconcileIngress) vipName(ing types.NamespacedName) string {
 	return fmt.Sprintf("%s_%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
 }
 
-func (r *reconcileIngress) poolName(ing *networkingv1.Ingress) string {
-	return fmt.Sprintf("%s_%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
+func (r *reconcileIngress) poolName(ing types.NamespacedName) string {
+	return r.vipName(ing)
 }
 
 func (r *reconcileIngress) targetName(tg target) string {
@@ -82,11 +83,53 @@ func newVIP(name string, cfg config.Config, vip *networkapi.IP, pool *networkapi
 	}
 }
 
+func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.NamespacedName) error {
+	if r.cfg.DebugDisableCleanup {
+		return nil
+	}
+
+	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
+
+	vipName := r.vipName(ingName)
+
+	vip, err := netapiCli.GetVIP(ctx, vipName)
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+	if !networkapi.IsNotFound(err) {
+		if err := netapiCli.DeleteVIP(ctx, vip.ID); err != nil {
+			return err
+		}
+	}
+
+	vipIP, err := netapiCli.GetIPByName(ctx, vipName)
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+	if !networkapi.IsNotFound(err) {
+		if err := netapiCli.DeleteIP(ctx, vipIP.ID); err != nil {
+			return err
+		}
+	}
+
+	poolName := r.poolName(ingName)
+	pool, err := netapiCli.GetIPByName(ctx, poolName)
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+	if !networkapi.IsNotFound(err) {
+		if err := netapiCli.DeletePool(ctx, pool.ID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
 	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
-	wantedPool := newPool(r.poolName(ing), r.cfg)
-
+	wantedPool := newPool(r.poolName(namespacedName(ing)), r.cfg)
 	for _, tg := range targets {
 		targetName := r.targetName(tg)
 
@@ -122,7 +165,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		})
 	}
 
-	vipPool, err := netapiCli.GetPool(ctx, r.poolName(ing))
+	vipPool, err := netapiCli.GetPool(ctx, wantedPool.Identifier)
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}
@@ -141,24 +184,27 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
-	vipIP, err := netapiCli.GetIPByName(ctx, r.vipName(ing))
+	vipName := r.vipName(namespacedName(ing))
+
+	vipIP, err := netapiCli.GetIPByName(ctx, vipName)
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}
 	if networkapi.IsNotFound(err) {
 		// TODO: get vip environment id from annotations
-		vipIP, err = netapiCli.CreateVIPIPv4(ctx, r.vipName(ing), r.cfg.DefaultVIPEnvironmentID)
+		vipIP, err = netapiCli.CreateVIPIPv4(ctx, vipName, r.cfg.DefaultVIPEnvironmentID)
 	}
 	if err != nil {
 		return err
 	}
 
-	vip, err := netapiCli.GetVIP(ctx, r.vipName(ing))
+	wantedVIP := newVIP(vipName, r.cfg, vipIP, vipPool)
+
+	vip, err := netapiCli.GetVIP(ctx, wantedVIP.Name)
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}
 
-	wantedVIP := newVIP(r.vipName(ing), r.cfg, vipIP, vipPool)
 	if networkapi.IsNotFound(err) {
 		needsDeploy = true
 		vip, err = netapiCli.CreateVIP(ctx, wantedVIP)

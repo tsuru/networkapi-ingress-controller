@@ -239,6 +239,10 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 	err = r.client.Get(ctx, request.NamespacedName, ing)
 	if k8sErrors.IsNotFound(err) {
 		log.Error(nil, "Could not find Ingress")
+		err = r.cleanupNetworkAPI(ctx, request.NamespacedName)
+		if err != nil {
+			return result, err
+		}
 		r.serviceWatcher.removeIngress(request.NamespacedName)
 		return result, nil
 	}

@@ -33,6 +33,7 @@ type Config struct {
 	DefaultVIPL4ProtocolID   int
 	DefaultVIPL7ProtocolID   int
 	DebugReconcileOnce       bool
+	DebugDisableCleanup      bool
 }
 
 type EquipmentConfig struct {

@@ -183,6 +183,9 @@ type NetworkAPI interface {
 	GetIPByNetIP(ctx context.Context, ip net.IP) (*IP, error)
 	CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error)
 	GetEquipment(ctx context.Context, name string) (*Equipment, error)
+	DeleteIP(ctx context.Context, id int) error
+	DeletePool(ctx context.Context, id int) error
+	DeleteVIP(ctx context.Context, id int) error
 }
 
 type networkAPI struct {
@@ -444,6 +447,24 @@ func (n *networkAPI) GetIPByName(ctx context.Context, name string) (*IP, error) 
 		return nil, err
 	}
 	return parseIP(data)
+}
+
+func (n *networkAPI) delete(ctx context.Context, urlName string, id int) error {
+	u := fmt.Sprintf("/api/v3/%s/%d/", urlName, id)
+	_, err := n.doRequest(ctx, http.MethodDelete, u, nil, nil)
+	return err
+}
+
+func (n *networkAPI) DeleteIP(ctx context.Context, id int) error {
+	return n.delete(ctx, "ipv4", id)
+}
+
+func (n *networkAPI) DeletePool(ctx context.Context, id int) error {
+	return n.delete(ctx, "pool", id)
+}
+
+func (n *networkAPI) DeleteVIP(ctx context.Context, id int) error {
+	return n.delete(ctx, "vip-request", id)
 }
 
 func Client(baseURL, user, password string) NetworkAPI {
