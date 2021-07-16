@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func getClient() *http.Client {
@@ -24,9 +25,11 @@ type baseClient struct {
 }
 
 func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs url.Values, bodyData []byte) ([]byte, error) {
+	logger := log.FromContext(ctx).V(2).WithValues("method", method)
 	var body io.Reader
 	if bodyData != nil {
 		body = bytes.NewReader(bodyData)
+		logger = logger.WithValues("body", string(bodyData))
 	}
 
 	fullURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(c.baseURL, "/"), strings.TrimPrefix(u, "/"))
@@ -34,6 +37,8 @@ func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs 
 		fullURL += "?" + qs.Encode()
 	}
 
+	logger = logger.WithValues("url", fullURL)
+	logger.Info("NetworkAPI request")
 	req, err := http.NewRequest(method, fullURL, body)
 	if err != nil {
 		return nil, err
@@ -48,14 +53,17 @@ func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs 
 
 	resp, err := getClient().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "unable to request %s %s with body %s", method, fullURL, string(bodyData))
 	}
 	defer resp.Body.Close()
 
 	rspData, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "unable to read response %d for %s %s with body %s", resp.StatusCode, method, fullURL, string(bodyData))
 	}
+
+	logger = logger.WithValues("status", resp.StatusCode, "response_body", string(rspData))
+	logger.Info("NetworkAPI response")
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return nil, errors.Errorf("invalid response %d for %s %s with body %s: %s", resp.StatusCode, method, fullURL, string(bodyData), string(rspData))

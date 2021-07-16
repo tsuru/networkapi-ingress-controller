@@ -6,6 +6,7 @@ import (
 	"github.com/pkg/errors"
 	ingConfig "github.com/tsuru/networkapi-ingress-controller/config"
 	ingController "github.com/tsuru/networkapi-ingress-controller/controller"
+	"go.uber.org/zap/zapcore"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -15,25 +16,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 )
 
-func init() {
-	log.SetLogger(zap.New())
-}
-
 const (
 	controllerName = "networkapi-ingress-controller"
 )
 
 func run() error {
+	cfg, err := ingConfig.Get()
+	if err != nil {
+		return errors.Wrap(err, "unable to read config")
+	}
+	log.SetLogger(zap.New(zap.Level(zapcore.Level(cfg.LogLevel * -1))))
+
 	entryLog := log.Log.WithName("run")
 
 	mgr, err := manager.New(config.GetConfigOrDie(), manager.Options{})
 	if err != nil {
 		return errors.Wrap(err, "unable to set up overall controller manager")
-	}
-
-	cfg, err := ingConfig.Get()
-	if err != nil {
-		return errors.Wrap(err, "unable to read config")
 	}
 
 	ingressReconciler := ingController.NewReconciler(

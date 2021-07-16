@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 
 	"github.com/tsuru/networkapi-ingress-controller/config"
@@ -9,6 +10,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 )
+
+func (r *reconcileIngress) vipName(ing *networkingv1.Ingress) string {
+	return fmt.Sprintf("%s_%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
+}
+
+func (r *reconcileIngress) poolName(ing *networkingv1.Ingress) string {
+	return fmt.Sprintf("%s_%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
+}
+
+func (r *reconcileIngress) targetName(tg target) string {
+	return fmt.Sprintf("%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, tg.IP.String())
+}
 
 func newEquipment(name string, cfg config.Config) *networkapi.Equipment {
 	return &networkapi.Equipment{
@@ -24,12 +37,25 @@ func newEquipment(name string, cfg config.Config) *networkapi.Equipment {
 	}
 }
 
+func newPool(name string, cfg config.Config, ing *networkingv1.Ingress) *networkapi.Pool {
+	return &networkapi.Pool{
+		Identifier:        name,
+		DefaultPort:       80,
+		Environment:       networkapi.IntOrID{ID: cfg.Equipment.Environment},
+		ServiceDownAction: networkapi.ServiceDownAction{Name: "none"},
+		LBMethod:          "round-robin",
+		HealthCheck: networkapi.HealthCheck{
+			Type:        "TCP",
+			Destination: "*:*",
+		},
+		DefaultLimit: 0,
+	}
+}
+
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
 	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
-	wantedPool := &networkapi.Pool{
-		Name: r.poolName(ing),
-	}
+	wantedPool := newPool(r.poolName(ing), r.cfg, ing)
 
 	for _, tg := range targets {
 		targetName := r.targetName(tg)
@@ -54,9 +80,15 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		if err != nil {
 			return err
 		}
-		wantedPool.Reals = append(wantedPool.Reals, networkapi.PoolMember{
-			IPID: netIP.ID,
-			Port: tg.Port,
+		wantedPool.Members = append(wantedPool.Members, networkapi.PoolMember{
+			IP: &networkapi.PoolMemberIP{
+				ID:         netIP.ID,
+				IPFormated: tg.IP.String(),
+			},
+			PortReal:     tg.Port,
+			Priority:     1,
+			Weight:       1,
+			MemberStatus: 1,
 		})
 	}
 
@@ -67,7 +99,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 
 	if networkapi.IsNotFound(err) {
 		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
-	} else if !reflect.DeepEqual(vipPool, wantedPool) {
+	} else if !vipPool.DeepEqual(*wantedPool) {
 		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
 	}
 	if err != nil {

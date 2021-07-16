@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
+	"reflect"
 
 	"github.com/pkg/errors"
 )
@@ -22,15 +22,72 @@ type VIP struct {
 	PoolIDs       []int
 }
 
+type PoolMemberIP struct {
+	ID         int    `json:"id,omitempty"`
+	IPFormated string `json:"ip_formated,omitempty"`
+}
+
 type PoolMember struct {
-	Port int
-	IPID int
+	IP           *PoolMemberIP `json:"ip"`
+	IPv6         *PoolMemberIP `json:"ipv6"`
+	Priority     int           `json:"priority"`
+	Weight       int           `json:"weight"`
+	Limit        int           `json:"limit"`
+	PortReal     int           `json:"port_real"`
+	MemberStatus int           `json:"member_status"`
+}
+
+type HealthCheck struct {
+	Identifier  string `json:"identifier"`
+	Type        string `json:"healthcheck_type"`
+	Request     string `json:"healthcheck_request"`
+	Expect      string `json:"healthcheck_expect"`
+	Destination string `json:"destination"`
+}
+
+type ServiceDownAction struct {
+	Name string `json:"name,omitempty"`
+}
+
+type IntOrID struct {
+	ID int
+}
+
+func (v *IntOrID) UnmarshalJSON(data []byte) error {
+	var id int
+	err := json.Unmarshal(data, &id)
+	if err == nil {
+		v.ID = id
+		return nil
+	}
+	var asStruct IDOnly
+	err = json.Unmarshal(data, &asStruct)
+	if err == nil {
+		v.ID = asStruct.ID
+	}
+	return err
+}
+
+func (v IntOrID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.ID)
 }
 
 type Pool struct {
-	ID    int
-	Name  string
-	Reals []PoolMember
+	ID                int               `json:"id,omitempty"`
+	Identifier        string            `json:"identifier,omitempty"`
+	DefaultPort       int               `json:"default_port,omitempty"`
+	Environment       IntOrID           `json:"environment,omitempty"`
+	ServiceDownAction ServiceDownAction `json:"servicedownaction,omitempty"`
+	LBMethod          string            `json:"lb_method,omitempty"`
+	HealthCheck       HealthCheck       `json:"healthcheck,omitempty"`
+	DefaultLimit      int               `json:"default_limit"`
+	Members           []PoolMember      `json:"server_pool_members,omitempty"`
+}
+
+func (p1 Pool) DeepEqual(p2 Pool) bool {
+	p1.ID = 0
+	p2.ID = 0
+	return reflect.DeepEqual(p1, p2)
 }
 
 type IP struct {
@@ -55,7 +112,7 @@ type Environment struct {
 }
 
 type Equipment struct {
-	ID            int           `json:"id,omitempty"`
+	ID            int           `json:"id,omitempty" xml:"id"`
 	Name          string        `json:"name,omitempty"`
 	EquipmentType int           `json:"equipment_type,omitempty"`
 	Model         int           `json:"model,omitempty"`
@@ -107,43 +164,121 @@ func (n *networkAPI) CreateVIP(ctx context.Context, vip *VIP) error {
 	return nil
 }
 
+func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) error {
+	return nil
+}
+
+func parsePool(data []byte) (*Pool, error) {
+	var result []Pool
+	err := unmarshalField(data, "server_pools", &result)
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, errNotFound
+	}
+	if len(result) > 1 {
+		return nil, errors.Errorf("multiple pools found when one was expected: %#v", result)
+	}
+	return &result[0], nil
+}
+
 func (n *networkAPI) GetPool(ctx context.Context, name string) (*Pool, error) {
-	return nil, nil
+	search, err := json.Marshal(map[string]interface{}{
+		"extends_search": []interface{}{
+			map[string]string{"identifier": name},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := n.doRequest(ctx, http.MethodGet, "/api/v3/pool/", url.Values{
+		"search": []string{string(search)},
+		"kind":   []string{"details"},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parsePool(data)
+}
+
+func (n *networkAPI) getPoolByID(ctx context.Context, id int) (*Pool, error) {
+	u := fmt.Sprintf("/api/v3/pool/%d/", id)
+	data, err := n.doRequest(ctx, http.MethodGet, u, url.Values{
+		"kind": []string{"details"},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parsePool(data)
 }
 
 func (n *networkAPI) CreatePool(ctx context.Context, pool *Pool) (*Pool, error) {
-	return nil, nil
+	body, err := marshalField("server_pools", []interface{}{pool})
+	if err != nil {
+		return nil, err
+	}
+	data, err := n.doRequest(ctx, http.MethodPost, "/api/v3/pool/", nil, body)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := unmarshalIDs(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, errors.Errorf("no pools created: %s", string(data))
+	}
+	if len(ids) > 1 {
+		return nil, errors.Errorf("multiple pools created: %s", string(data))
+	}
+	return n.getPoolByID(ctx, ids[0])
+}
+
+func (n *networkAPI) UpdatePool(ctx context.Context, pool *Pool) (*Pool, error) {
+	body, err := marshalField("server_pools", []interface{}{pool})
+	if err != nil {
+		return nil, err
+	}
+	u := fmt.Sprintf("/api/v4/pool/%d/", pool.ID)
+	data, err := n.doRequest(ctx, http.MethodPut, u, nil, body)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := unmarshalIDs(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, errors.Errorf("no pools created: %s", string(data))
+	}
+	if len(ids) > 1 {
+		return nil, errors.Errorf("multiple pools created: %s", string(data))
+	}
+	return n.getPoolByID(ctx, ids[0])
 }
 
 func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error) {
 	const vipIPRequestTpl = `<?xml version="1.0" encoding="UTF-8"?><networkapi versao="1.0"><ip_map><id_evip>%d</id_evip><name>%s</name></ip_map></networkapi>`
 	body := fmt.Sprintf(vipIPRequestTpl, vipEnvironmentID, name)
-	data, err := n.doRequest(ctx, http.MethodPost, "/invalid/ip/availableip4/vip/", nil, []byte(body))
+	u := fmt.Sprintf("/ip/availableip4/vip/%d/", vipEnvironmentID)
+	data, err := n.doRequest(ctx, http.MethodPost, u, nil, []byte(body))
 	if err != nil {
 		return nil, err
 	}
-	var result map[string]interface{}
-	err = xml.Unmarshal(data, &result)
+	var xmlData struct {
+		XMLName xml.Name `xml:"networkapi"`
+		IP      IP       `xml:"ip"`
+	}
+	err = xml.Unmarshal(data, &xmlData)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to unmarshal %q", string(data))
 	}
-	if ipRaw, ok := result["ip"]; ok {
-		if ip, ok := ipRaw.(map[string]interface{}); ok {
-			ipID, _ := strconv.Atoi(fmt.Sprintf("%v", ip["id"]))
-			if ipID != 0 {
-				return n.getIPByID(ctx, ipID)
-			}
-		}
+	if xmlData.IP.ID != 0 {
+		return n.getIPByID(ctx, xmlData.IP.ID)
 	}
-	return nil, errors.Errorf("unable to parse ID from %#v", result)
-}
-
-func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) error {
-	return nil
-}
-
-func (n *networkAPI) UpdatePool(ctx context.Context, pool *Pool) (*Pool, error) {
-	return nil, nil
+	return nil, errors.Errorf("unable to parse ID from %q", string(data))
 }
 
 func (n *networkAPI) CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error) {
@@ -227,8 +362,8 @@ func parseIP(data []byte) (*IP, error) {
 }
 
 func (n *networkAPI) getIPByID(ctx context.Context, id int) (*IP, error) {
-	url := fmt.Sprintf("/api/v3/ipv4/%d/", id)
-	data, err := n.doRequest(ctx, http.MethodGet, url, nil, nil)
+	u := fmt.Sprintf("/api/v3/ipv4/%d/", id)
+	data, err := n.doRequest(ctx, http.MethodGet, u, nil, nil)
 	if err != nil {
 		return nil, err
 	}

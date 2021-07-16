@@ -42,18 +42,6 @@ func NewReconciler(client client.Client, evtRecorder record.EventRecorder, cfg c
 	}
 }
 
-func (r *reconcileIngress) vipName(ing *networkingv1.Ingress) string {
-	return fmt.Sprintf("%s_%s/%s/%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
-}
-
-func (r *reconcileIngress) poolName(ing *networkingv1.Ingress) string {
-	return fmt.Sprintf("%s_%s/%s/%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
-}
-
-func (r *reconcileIngress) targetName(tg target) string {
-	return fmt.Sprintf("%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, tg.IP.String())
-}
-
 func validateIngress(ing *networkingv1.Ingress) error {
 	if ing.Spec.DefaultBackend == nil && len(ing.Spec.Rules) == 0 {
 		return fmt.Errorf("Ingress must have either default backend or one rule")
