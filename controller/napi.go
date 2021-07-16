@@ -127,9 +127,14 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
+	needsDeploy := false
+
 	if networkapi.IsNotFound(err) {
+		needsDeploy = true
 		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
 	} else if !vipPool.DeepEqual(*wantedPool) {
+		needsDeploy = true
+		wantedPool.ID = vipPool.ID
 		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
 	}
 	if err != nil {
@@ -155,12 +160,22 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 
 	wantedVIP := newVIP(r.vipName(ing), r.cfg, vipIP, vipPool)
 	if networkapi.IsNotFound(err) {
+		needsDeploy = true
 		vip, err = netapiCli.CreateVIP(ctx, wantedVIP)
 	} else if !vip.DeepEqual(*wantedVIP) {
+		needsDeploy = true
+		wantedVIP.ID = vip.ID
 		vip, err = netapiCli.UpdateVIP(ctx, wantedVIP)
 	}
 	if err != nil {
 		return err
+	}
+
+	if needsDeploy {
+		err = netapiCli.DeployVIP(ctx, vip.ID)
+		if err != nil {
+			return err
+		}
 	}
 
 	ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{

@@ -173,6 +173,7 @@ type NetworkAPI interface {
 	GetVIP(ctx context.Context, name string) (*VIP, error)
 	CreateVIP(ctx context.Context, vip *VIP) (*VIP, error)
 	UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error)
+	DeployVIP(ctx context.Context, vipID int) error
 	GetPool(ctx context.Context, name string) (*Pool, error)
 	CreatePool(ctx context.Context, pool *Pool) (*Pool, error)
 	UpdatePool(ctx context.Context, pool *Pool) (*Pool, error)
@@ -249,6 +250,12 @@ func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error) {
 		return nil, err
 	}
 	return n.getVIPByID(ctx, id)
+}
+
+func (n *networkAPI) DeployVIP(ctx context.Context, vipID int) error {
+	u := fmt.Sprintf("/api/v3/vip-request/deploy/%d/", vipID)
+	_, err := n.doRequest(ctx, http.MethodPost, u, nil, nil)
+	return err
 }
 
 func parsePool(data []byte) (*Pool, error) {
