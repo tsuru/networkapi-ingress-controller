@@ -14,14 +14,16 @@ func TestFromInstance(t *testing.T) {
 			"kube-napi-ingress.tsuru.io/POOLEnvironmentID": "101",
 		},
 	}
-	cfg := FromInstance(&m, Config{
+	baseCfg := Config{
 		DefaultVIPEnvironmentID:  8,
 		DefaultPoolEnvironmentID: 7,
 		DefaultCacheGroupID:      6,
-	})
+	}
+	cfg := FromInstance(&m, baseCfg)
 	require.Equal(t, InstanceConfig{
 		VIPEnvironmentID:  99,
 		PoolEnvironmentID: 101,
 		CacheGroupID:      6,
+		BaseConfig:        baseCfg,
 	}, cfg)
 }
