@@ -18,11 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const (
-	nameCommonPrefix = "kube-napi-ingress"
-	finalizerName    = nameCommonPrefix + ".tsuru.io/cleanup"
-)
-
 var _ reconcile.Reconciler = &reconcileIngress{}
 
 type reconcileIngress struct {
@@ -231,12 +226,13 @@ func (r *reconcileIngress) cleanUp(ctx context.Context, ingName types.Namespaced
 		return result, err
 	}
 	if ing == nil {
+		r.serviceWatcher.removeIngress(ingName)
 		return result, nil
 	}
 
 	var newFinalizers []string
 	for _, finalizer := range ing.ObjectMeta.Finalizers {
-		if finalizer != finalizerName {
+		if finalizer != config.FinalizerName {
 			newFinalizers = append(newFinalizers, finalizer)
 		}
 	}
@@ -277,13 +273,13 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 
 	hasFinalizer := false
 	for _, finalizer := range ing.ObjectMeta.Finalizers {
-		if finalizer == finalizerName {
+		if finalizer == config.FinalizerName {
 			hasFinalizer = true
 			break
 		}
 	}
 	if !hasFinalizer {
-		ing.ObjectMeta.Finalizers = append(ing.ObjectMeta.Finalizers, finalizerName)
+		ing.ObjectMeta.Finalizers = append(ing.ObjectMeta.Finalizers, config.FinalizerName)
 		err = r.client.Update(ctx, ing)
 		if err != nil {
 			return result, err

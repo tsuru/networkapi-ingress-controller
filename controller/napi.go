@@ -13,7 +13,7 @@ import (
 )
 
 func (r *reconcileIngress) vipName(ing types.NamespacedName) string {
-	return fmt.Sprintf("%s_%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, ing.Namespace, ing.Name)
+	return fmt.Sprintf("%s_%s_%s_%s", config.IngressControllerName, r.cfg.ClusterName, ing.Namespace, ing.Name)
 }
 
 func (r *reconcileIngress) poolName(ing types.NamespacedName) string {
@@ -21,28 +21,28 @@ func (r *reconcileIngress) poolName(ing types.NamespacedName) string {
 }
 
 func (r *reconcileIngress) targetName(tg target) string {
-	return fmt.Sprintf("%s_%s_%s", nameCommonPrefix, r.cfg.ClusterName, tg.IP.String())
+	return fmt.Sprintf("%s_%s_%s", config.IngressControllerName, r.cfg.ClusterName, tg.IP.String())
 }
 
-func newEquipment(name string, cfg config.Config) *networkapi.Equipment {
+func newEquipment(name string, cfg config.InstanceConfig) *networkapi.Equipment {
 	return &networkapi.Equipment{
 		Name:          name,
-		EquipmentType: cfg.Equipment.Type,
-		Model:         cfg.Equipment.Model,
+		EquipmentType: cfg.BaseConfig.Equipment.Type,
+		Model:         cfg.BaseConfig.Equipment.Model,
 		Environments: []networkapi.Environment{
-			{Environment: cfg.Equipment.Environment},
+			{Environment: cfg.BaseConfig.Equipment.Environment},
 		},
 		Groups: []networkapi.IDOnly{
-			{ID: cfg.Equipment.Group},
+			{ID: cfg.BaseConfig.Equipment.Group},
 		},
 	}
 }
 
-func newPool(name string, cfg config.Config) *networkapi.Pool {
+func newPool(name string, cfg config.InstanceConfig) *networkapi.Pool {
 	return &networkapi.Pool{
 		Identifier:        name,
 		DefaultPort:       80,
-		Environment:       networkapi.IntOrID{ID: cfg.DefaultPoolEnvironmentID},
+		Environment:       networkapi.IntOrID{ID: cfg.PoolEnvironmentID},
 		ServiceDownAction: networkapi.ServiceDownAction{Name: "none"},
 		LBMethod:          "round-robin",
 		HealthCheck: networkapi.HealthCheck{
@@ -53,12 +53,12 @@ func newPool(name string, cfg config.Config) *networkapi.Pool {
 	}
 }
 
-func newVIP(name string, cfg config.Config, vip *networkapi.IP, pool *networkapi.Pool) *networkapi.VIP {
+func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, pool *networkapi.Pool) *networkapi.VIP {
 	return &networkapi.VIP{
 		Name:           name,
 		Service:        name,
 		Business:       "tsuru gke",
-		EnvironmentVIP: networkapi.IntOrID{ID: cfg.DefaultVIPEnvironmentID},
+		EnvironmentVIP: networkapi.IntOrID{ID: cfg.VIPEnvironmentID},
 		IPv4:           &networkapi.IntOrID{ID: vip.ID},
 		Ports: []networkapi.VIPPort{
 			{
@@ -66,20 +66,20 @@ func newVIP(name string, cfg config.Config, vip *networkapi.IP, pool *networkapi
 				Pools: []networkapi.VIPPool{
 					{
 						ServerPool: networkapi.IntOrID{ID: pool.ID},
-						L7Rule:     networkapi.IntOrID{ID: cfg.DefaultVIPL7RuleID},
+						L7Rule:     networkapi.IntOrID{ID: cfg.VIPL7RuleID},
 					},
 				},
 				Options: networkapi.VIPPortOptions{
-					L4Protocol: networkapi.IntOrID{ID: cfg.DefaultVIPL4ProtocolID},
-					L7Protocol: networkapi.IntOrID{ID: cfg.DefaultVIPL7ProtocolID},
+					L4Protocol: networkapi.IntOrID{ID: cfg.VIPL4ProtocolID},
+					L7Protocol: networkapi.IntOrID{ID: cfg.VIPL7ProtocolID},
 				},
 			},
 		},
 		Options: networkapi.VIPOptions{
-			CacheGroup:    networkapi.IntOrID{ID: cfg.DefaultCacheGroupID},
-			TrafficReturn: networkapi.IntOrID{ID: cfg.DefaultTrafficReturnID},
-			Persistence:   networkapi.IntOrID{ID: cfg.DefaultPersistenceID},
-			Timeout:       networkapi.IntOrID{ID: cfg.DefaultTimeoutID},
+			CacheGroup:    networkapi.IntOrID{ID: cfg.CacheGroupID},
+			TrafficReturn: networkapi.IntOrID{ID: cfg.TrafficReturnID},
+			Persistence:   networkapi.IntOrID{ID: cfg.PersistenceID},
+			Timeout:       networkapi.IntOrID{ID: cfg.TimeoutID},
 		},
 	}
 }
@@ -132,13 +132,14 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
 	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
-	wantedPool := newPool(r.poolName(namespacedName(ing)), r.cfg)
+	instCfg := config.FromInstance(ing, r.cfg)
+	wantedPool := newPool(r.poolName(namespacedName(ing)), instCfg)
 	for _, tg := range targets {
 		targetName := r.targetName(tg)
 
 		equip, err := netapiCli.GetEquipment(ctx, targetName)
 		if networkapi.IsNotFound(err) {
-			newEquip := newEquipment(targetName, r.cfg)
+			newEquip := newEquipment(targetName, instCfg)
 			equip, err = netapiCli.CreateEquipment(ctx, newEquip)
 		}
 		if err != nil {
@@ -194,14 +195,13 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 	if networkapi.IsNotFound(err) {
-		// TODO: get vip environment id from annotations
-		vipIP, err = netapiCli.CreateVIPIPv4(ctx, vipName, r.cfg.DefaultVIPEnvironmentID)
+		vipIP, err = netapiCli.CreateVIPIPv4(ctx, vipName, instCfg.VIPEnvironmentID)
 	}
 	if err != nil {
 		return err
 	}
 
-	wantedVIP := newVIP(vipName, r.cfg, vipIP, vipPool)
+	wantedVIP := newVIP(vipName, instCfg, vipIP, vipPool)
 
 	vip, err := netapiCli.GetVIP(ctx, wantedVIP.Name)
 	if err != nil && !networkapi.IsNotFound(err) {

@@ -2,14 +2,21 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
+	IngressControllerName   = "kube-napi-ingress"
+	FinalizerName           = IngressControllerName + ".tsuru.io/cleanup"
 	defaultIngressClassName = "globo-networkapi"
+	annotationsConfigPrefix = IngressControllerName + ".tsuru.io/"
 )
 
 type Config struct {
@@ -126,4 +133,50 @@ func Get() (Config, error) {
 	setDefaults(&cfg)
 	err = cfg.validate()
 	return cfg, err
+}
+
+type InstanceConfig struct {
+	VIPEnvironmentID  int
+	PoolEnvironmentID int
+	CacheGroupID      int
+	TrafficReturnID   int
+	TimeoutID         int
+	PersistenceID     int
+	VIPL7RuleID       int
+	VIPL4ProtocolID   int
+	VIPL7ProtocolID   int
+	BaseConfig        Config
+}
+
+func FromInstance(obj metav1.Object, cfg Config) InstanceConfig {
+	instConfig := InstanceConfig{
+		VIPEnvironmentID:  cfg.DefaultVIPEnvironmentID,
+		PoolEnvironmentID: cfg.DefaultPoolEnvironmentID,
+		CacheGroupID:      cfg.DefaultCacheGroupID,
+		TrafficReturnID:   cfg.DefaultTrafficReturnID,
+		TimeoutID:         cfg.DefaultTimeoutID,
+		PersistenceID:     cfg.DefaultPersistenceID,
+		VIPL7RuleID:       cfg.DefaultVIPL7RuleID,
+		VIPL4ProtocolID:   cfg.DefaultVIPL4ProtocolID,
+		VIPL7ProtocolID:   cfg.DefaultVIPL7ProtocolID,
+	}
+
+	lowerAnnotations := map[string]string{}
+	for key, value := range obj.GetAnnotations() {
+		lowerAnnotations[strings.ToLower(key)] = value
+	}
+
+	instElem := reflect.ValueOf(&instConfig).Elem()
+	instType := instElem.Type()
+	for i := 0; i < instElem.NumField(); i++ {
+		fieldName := instType.Field(i).Name
+		annotationValue, ok := lowerAnnotations[strings.ToLower(annotationsConfigPrefix+fieldName)]
+		if !ok {
+			continue
+		}
+		fmt.Sscanf(annotationValue, "%v", instElem.Field(i).Addr().Interface())
+	}
+
+	instConfig.BaseConfig = cfg
+	return instConfig
 }

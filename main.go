@@ -16,10 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 )
 
-const (
-	controllerName = "networkapi-ingress-controller"
-)
-
 func run() error {
 	cfg, err := ingConfig.Get()
 	if err != nil {
@@ -36,11 +32,11 @@ func run() error {
 
 	ingressReconciler := ingController.NewReconciler(
 		mgr.GetClient(),
-		mgr.GetEventRecorderFor(controllerName),
+		mgr.GetEventRecorderFor(ingConfig.IngressControllerName),
 		cfg,
 	)
 
-	c, err := controller.New(controllerName, mgr, controller.Options{
+	c, err := controller.New(ingConfig.IngressControllerName, mgr, controller.Options{
 		Reconciler: ingressReconciler,
 	})
 	if err != nil {
