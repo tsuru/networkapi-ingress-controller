@@ -17,6 +17,7 @@ import (
 )
 
 func run() error {
+	log.SetLogger(zap.New())
 	cfg, err := ingConfig.Get()
 	if err != nil {
 		return errors.Wrap(err, "unable to read config")

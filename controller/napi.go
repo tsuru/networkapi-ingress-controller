@@ -100,7 +100,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 		return err
 	}
 	if !networkapi.IsNotFound(err) {
-		if err := netapiCli.DeleteVIP(ctx, vip.ID); err != nil {
+		if err = netapiCli.DeleteVIP(ctx, vip.ID); err != nil {
 			return err
 		}
 	}
@@ -110,7 +110,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 		return err
 	}
 	if !networkapi.IsNotFound(err) {
-		if err := netapiCli.DeleteIP(ctx, vipIP.ID); err != nil {
+		if err = netapiCli.DeleteIP(ctx, vipIP.ID); err != nil {
 			return err
 		}
 	}
@@ -121,7 +121,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 		return err
 	}
 	if !networkapi.IsNotFound(err) {
-		if err := netapiCli.DeletePool(ctx, pool.ID); err != nil {
+		if err = netapiCli.DeletePool(ctx, pool.ID); err != nil {
 			return err
 		}
 	}
