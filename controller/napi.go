@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func (r *reconcileIngress) vipName(ing types.NamespacedName) string {
@@ -84,7 +85,9 @@ func newVIP(name string, cfg config.Config, vip *networkapi.IP, pool *networkapi
 }
 
 func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.NamespacedName) error {
+	lg := log.FromContext(ctx)
 	if r.cfg.DebugDisableCleanup {
+		lg.Info("Would cleanup ingress from network api")
 		return nil
 	}
 
@@ -113,7 +116,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 	}
 
 	poolName := r.poolName(ingName)
-	pool, err := netapiCli.GetIPByName(ctx, poolName)
+	pool, err := netapiCli.GetPool(ctx, poolName)
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}

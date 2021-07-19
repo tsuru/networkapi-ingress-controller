@@ -20,6 +20,7 @@ import (
 
 const (
 	nameCommonPrefix = "kube-napi-ingress"
+	finalizerName    = nameCommonPrefix + ".tsuru.io/cleanup"
 )
 
 var _ reconcile.Reconciler = &reconcileIngress{}
@@ -52,7 +53,7 @@ func validateIngress(ing *networkingv1.Ingress) error {
 	if len(ing.Spec.Rules) > 1 {
 		return errors.New("Ingress can have only one Rule")
 	}
-	if len(ing.Spec.Rules) > 0 {
+	if len(ing.Spec.Rules) > 0 && ing.Spec.Rules[0].HTTP != nil {
 		paths := ing.Spec.Rules[0].HTTP.Paths
 		if len(paths) > 1 {
 			return errors.New("Ingress can have only one Path")
@@ -73,7 +74,7 @@ func validateIngress(ing *networkingv1.Ingress) error {
 }
 
 func backendFromIngress(ing *networkingv1.Ingress) *networkingv1.IngressServiceBackend {
-	if len(ing.Spec.Rules) > 0 && len(ing.Spec.Rules[0].HTTP.Paths) > 0 {
+	if len(ing.Spec.Rules) > 0 && ing.Spec.Rules[0].HTTP != nil && len(ing.Spec.Rules[0].HTTP.Paths) > 0 {
 		return ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service
 	}
 	if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
@@ -199,8 +200,8 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Se
 }
 
 func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networkingv1.Ingress) (reconcile.Result, error) {
-	log := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", namespacedName(ing))
-	log.Info("Reconciling Ingress")
+	lg := log.FromContext(ctx)
+	lg.Info("Reconciling Ingress")
 	result := reconcile.Result{}
 
 	err := validateIngress(ing)
@@ -223,13 +224,39 @@ func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networking
 	return result, err
 }
 
+func (r *reconcileIngress) cleanUp(ctx context.Context, ingName types.NamespacedName, ing *networkingv1.Ingress) (reconcile.Result, error) {
+	var result reconcile.Result
+	err := r.cleanupNetworkAPI(ctx, ingName)
+	if err != nil {
+		return result, err
+	}
+	if ing == nil {
+		return result, nil
+	}
+
+	var newFinalizers []string
+	for _, finalizer := range ing.ObjectMeta.Finalizers {
+		if finalizer != finalizerName {
+			newFinalizers = append(newFinalizers, finalizer)
+		}
+	}
+	ing.ObjectMeta.Finalizers = newFinalizers
+	err = r.client.Update(ctx, ing)
+	if err != nil {
+		return result, err
+	}
+	r.serviceWatcher.removeIngress(ingName)
+	return result, nil
+}
+
 func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Request) (result reconcile.Result, err error) {
-	log := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", request.NamespacedName.String())
+	lg := log.FromContext(ctx).WithName("reconcile").WithValues("ingress", request.NamespacedName.String())
+	ctx = log.IntoContext(ctx, lg)
 
 	if r.cfg.DebugReconcileOnce {
 		defer func() {
 			if err != nil {
-				log.Error(err, "Failed to reconcile Ingress")
+				lg.Error(err, "Failed to reconcile Ingress")
 			}
 			panic("DebugReconcileOnce is enabled")
 		}()
@@ -238,16 +265,29 @@ func (r *reconcileIngress) Reconcile(ctx context.Context, request reconcile.Requ
 	ing := &networkingv1.Ingress{}
 	err = r.client.Get(ctx, request.NamespacedName, ing)
 	if k8sErrors.IsNotFound(err) {
-		log.Error(nil, "Could not find Ingress")
-		err = r.cleanupNetworkAPI(ctx, request.NamespacedName)
-		if err != nil {
-			return result, err
-		}
-		r.serviceWatcher.removeIngress(request.NamespacedName)
-		return result, nil
+		lg.Error(nil, "Could not find Ingress")
+		return r.cleanUp(ctx, request.NamespacedName, nil)
 	}
 	if err != nil {
 		return result, errors.Wrap(err, "could not fetch Ingress")
+	}
+	if ing.DeletionTimestamp != nil {
+		return r.cleanUp(ctx, request.NamespacedName, ing)
+	}
+
+	hasFinalizer := false
+	for _, finalizer := range ing.ObjectMeta.Finalizers {
+		if finalizer == finalizerName {
+			hasFinalizer = true
+			break
+		}
+	}
+	if !hasFinalizer {
+		ing.ObjectMeta.Finalizers = append(ing.ObjectMeta.Finalizers, finalizerName)
+		err = r.client.Update(ctx, ing)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	r.events.Event(ing, corev1.EventTypeNormal, "NetworkAPIIngressReconciling", "Ingress reconciling")
