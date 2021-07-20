@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	ctrlConfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -71,6 +72,8 @@ func run() error {
 	if err != nil {
 		return errors.Wrap(err, "unable to set up overall controller manager")
 	}
+	mgr.AddHealthzCheck("ping", healthz.Ping)
+	mgr.AddReadyzCheck("ping", healthz.Ping)
 
 	ingressReconciler := ingController.NewReconciler(
 		mgr.GetClient(),

@@ -146,7 +146,7 @@ func (v IntOrID) MarshalJSON() ([]byte, error) {
 }
 
 type IP struct {
-	ID            int      `json:"id,omitempty"`
+	ID            int      `json:"id,omitempty" xml:"id"`
 	Oct1          byte     `json:"oct1,omitempty"`
 	Oct2          byte     `json:"oct2,omitempty"`
 	Oct3          byte     `json:"oct3,omitempty"`
