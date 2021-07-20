@@ -43,6 +43,7 @@ func newPool(name string, cfg config.InstanceConfig) *networkapi.Pool {
 		Identifier:        name,
 		DefaultPort:       80,
 		Environment:       networkapi.IntOrID{ID: cfg.PoolEnvironmentID},
+		EnvironmentVIP:    cfg.VIPEnvironmentID,
 		ServiceDownAction: networkapi.ServiceDownAction{Name: "none"},
 		LBMethod:          "round-robin",
 		HealthCheck: networkapi.HealthCheck{

@@ -61,6 +61,7 @@ type Pool struct {
 	Identifier        string            `json:"identifier,omitempty"`
 	DefaultPort       int               `json:"default_port,omitempty"`
 	Environment       IntOrID           `json:"environment,omitempty"`
+	EnvironmentVIP    int               `json:"environmentvip,omitempty"`
 	ServiceDownAction ServiceDownAction `json:"servicedownaction,omitempty"`
 	LBMethod          string            `json:"lb_method,omitempty"`
 	HealthCheck       HealthCheck       `json:"healthcheck,omitempty"`
@@ -71,6 +72,8 @@ type Pool struct {
 func (p1 Pool) DeepEqual(p2 Pool) bool {
 	p1.ID = 0
 	p2.ID = 0
+	p1.EnvironmentVIP = 0
+	p2.EnvironmentVIP = 0
 	return reflect.DeepEqual(p1, p2)
 }
 

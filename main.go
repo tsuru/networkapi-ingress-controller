@@ -1,12 +1,13 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"os"
 
 	"github.com/pkg/errors"
 	ingConfig "github.com/tsuru/networkapi-ingress-controller/config"
 	ingController "github.com/tsuru/networkapi-ingress-controller/controller"
-	"go.uber.org/zap/zapcore"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -16,13 +17,35 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 )
 
+var (
+	GitHash    = "HEAD"
+	GitVersion = "0.0.0"
+)
+
 func run() error {
-	log.SetLogger(zap.New())
-	cfg, err := ingConfig.Get()
+	var configFile = flag.String("config", "", "Paths to a networkapi ingress controller config.")
+	var version = flag.Bool("version", false, "Display version information and exit.")
+
+	opts := zap.Options{}
+	opts.BindFlags(flag.CommandLine)
+	flag.Parse()
+	zapLog := zap.New(zap.UseFlagOptions(&opts))
+	log.SetLogger(zapLog)
+
+	if version != nil && *version {
+		fmt.Printf("%s - %s\n", GitVersion, GitHash)
+		return nil
+	}
+
+	if configFile == nil || *configFile == "" {
+		flag.Usage()
+		return errors.New("missing config file")
+	}
+
+	cfg, err := ingConfig.Get(*configFile)
 	if err != nil {
 		return errors.Wrap(err, "unable to read config")
 	}
-	log.SetLogger(zap.New(zap.Level(zapcore.Level(cfg.LogLevel * -1))))
 
 	entryLog := log.Log.WithName("run")
 

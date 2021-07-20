@@ -117,12 +117,9 @@ func setDefaults(cfg *Config) {
 	}
 }
 
-func Get() (Config, error) {
+func Get(configFileName string) (Config, error) {
 	var cfg Config
-	if len(os.Args) < 2 {
-		return cfg, errors.New("required config file argument")
-	}
-	data, err := os.ReadFile(os.Args[1])
+	data, err := os.ReadFile(configFileName)
 	if err != nil {
 		return cfg, err
 	}
