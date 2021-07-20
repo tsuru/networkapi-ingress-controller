@@ -38,7 +38,10 @@ func NewReconciler(client client.Client, evtRecorder record.EventRecorder, cfg c
 	}
 }
 
-func validateIngress(ing *networkingv1.Ingress) error {
+func (r *reconcileIngress) validateIngress(ing *networkingv1.Ingress) error {
+	if !hasIngressClass(ing, r.cfg.IngressClassName) {
+		return fmt.Errorf("Invalid ingress class detected, predicate failed")
+	}
 	if ing.Spec.DefaultBackend == nil && len(ing.Spec.Rules) == 0 {
 		return fmt.Errorf("Ingress must have either default backend or one rule")
 	}
@@ -199,7 +202,7 @@ func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networking
 	lg.Info("Reconciling Ingress")
 	result := reconcile.Result{}
 
-	err := validateIngress(ing)
+	err := r.validateIngress(ing)
 	if err != nil {
 		return result, err
 	}

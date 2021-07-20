@@ -46,19 +46,22 @@ func (w *serviceWatcher) removeIngress(ingName types.NamespacedName) {
 	delete(w.ingressToService, ingName)
 }
 
-func hasClass(ingressClassName string) predicate.Funcs {
-	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		ing, ok := obj.(*networkingv1.Ingress)
-		if ok && ing.Spec.IngressClassName != nil && *ing.Spec.IngressClassName != "" {
-			return *ing.Spec.IngressClassName == ingressClassName
-		}
-		ingClass := obj.GetAnnotations()[networkingv1Beta1.AnnotationIngressClass]
-		return ingClass == ingressClassName
-	})
+func hasIngressClass(obj client.Object, ingressClassName string) bool {
+	ing, ok := obj.(*networkingv1.Ingress)
+	if ok && ing.Spec.IngressClassName != nil && *ing.Spec.IngressClassName != "" {
+		return *ing.Spec.IngressClassName == ingressClassName
+	}
+	ingClass := obj.GetAnnotations()[networkingv1Beta1.AnnotationIngressClass]
+	return ingClass == ingressClassName
 }
 
 func (r *reconcileIngress) Watch(c controller.Controller) error {
-	err := c.Watch(&source.Kind{Type: &networkingv1.Ingress{}}, &handler.EnqueueRequestForObject{}, hasClass(r.cfg.IngressClassName))
+	err := c.Watch(
+		&source.Kind{Type: &networkingv1.Ingress{}},
+		&handler.EnqueueRequestForObject{}, predicate.NewPredicateFuncs(func(obj client.Object) bool {
+			return hasIngressClass(obj, r.cfg.IngressClassName)
+		}),
+	)
 	if err != nil {
 		return errors.Wrap(err, "unable to watch Ingress")
 	}

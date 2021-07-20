@@ -20,7 +20,6 @@ const (
 )
 
 type Config struct {
-	LogLevel                 int
 	NetworkAPIURL            string
 	NetworkAPIUsername       string
 	NetworkAPIPassword       string

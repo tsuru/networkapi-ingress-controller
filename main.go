@@ -8,8 +8,11 @@ import (
 	"github.com/pkg/errors"
 	ingConfig "github.com/tsuru/networkapi-ingress-controller/config"
 	ingController "github.com/tsuru/networkapi-ingress-controller/controller"
+	"k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	ctrlConfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -23,7 +26,10 @@ var (
 )
 
 func run() error {
-	var configFile = flag.String("config", "", "Paths to a networkapi ingress controller config.")
+	entryLog := log.Log.WithName("run")
+
+	var ingressConfigFile = flag.String("ingress-config", "", "Paths to a networkapi ingress controller config.")
+	var ctrlConfigFile = flag.String("controller-config", "", "Paths to a networkapi ingress controller config.")
 	var version = flag.Bool("version", false, "Display version information and exit.")
 
 	opts := zap.Options{}
@@ -37,19 +43,31 @@ func run() error {
 		return nil
 	}
 
-	if configFile == nil || *configFile == "" {
+	if ingressConfigFile == nil || *ingressConfigFile == "" {
 		flag.Usage()
-		return errors.New("missing config file")
+		return errors.New("missing ingress-config argument")
 	}
 
-	cfg, err := ingConfig.Get(*configFile)
+	if ctrlConfigFile == nil || *ctrlConfigFile == "" {
+		flag.Usage()
+		return errors.New("missing controller-config argument")
+	}
+
+	cfg, err := ingConfig.Get(*ingressConfigFile)
 	if err != nil {
 		return errors.Wrap(err, "unable to read config")
 	}
 
-	entryLog := log.Log.WithName("run")
+	mgrOpts, err := manager.Options{
+		Scheme:                     scheme.Scheme,
+		LeaderElectionID:           ingConfig.IngressControllerName,
+		LeaderElectionResourceLock: resourcelock.LeasesResourceLock,
+	}.AndFrom(ctrlConfig.File().AtPath(*ctrlConfigFile))
+	if err != nil {
+		return errors.Wrapf(err, "unable to read controller-config file")
+	}
 
-	mgr, err := manager.New(config.GetConfigOrDie(), manager.Options{})
+	mgr, err := manager.New(config.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		return errors.Wrap(err, "unable to set up overall controller manager")
 	}
