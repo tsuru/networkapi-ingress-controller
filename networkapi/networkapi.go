@@ -74,6 +74,16 @@ func (p1 Pool) DeepEqual(p2 Pool) bool {
 	p2.ID = 0
 	p1.EnvironmentVIP = 0
 	p2.EnvironmentVIP = 0
+	if len(p1.Members) != len(p2.Members) {
+		return false
+	}
+	for i := range p1.Members {
+		if !p1.Members[i].DeepEqual(p2.Members[i]) {
+			return false
+		}
+	}
+	p1.Members = nil
+	p2.Members = nil
 	return reflect.DeepEqual(p1, p2)
 }
 
@@ -90,6 +100,14 @@ type PoolMember struct {
 	Limit        int           `json:"limit"`
 	PortReal     int           `json:"port_real"`
 	MemberStatus int           `json:"member_status"`
+}
+
+func (m1 PoolMember) DeepEqual(m2 PoolMember) bool {
+	// The third bit in the member status field is read-only and should be
+	// masked when comparing the two members.
+	m1.MemberStatus = m1.MemberStatus & 0b011
+	m2.MemberStatus = m2.MemberStatus & 0b011
+	return reflect.DeepEqual(m1, m2)
 }
 
 type HealthCheck struct {

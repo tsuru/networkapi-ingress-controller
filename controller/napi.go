@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/kr/pretty"
 	"github.com/tsuru/networkapi-ingress-controller/config"
 	"github.com/tsuru/networkapi-ingress-controller/networkapi"
 	corev1 "k8s.io/api/core/v1"
@@ -85,6 +86,19 @@ func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, pool *ne
 	}
 }
 
+func newPoolMember(tg target, netIP *networkapi.IP) networkapi.PoolMember {
+	return networkapi.PoolMember{
+		IP: &networkapi.PoolMemberIP{
+			ID:         netIP.ID,
+			IPFormated: tg.IP.String(),
+		},
+		PortReal:     tg.Port,
+		Priority:     1,
+		Weight:       1,
+		MemberStatus: 0b011,
+	}
+}
+
 func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.NamespacedName) error {
 	lg := log.FromContext(ctx)
 	if r.cfg.DebugDisableCleanup {
@@ -131,6 +145,8 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 }
 
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
+	lg := log.FromContext(ctx)
+
 	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
 	instCfg := config.FromInstance(ing, r.cfg)
@@ -158,16 +174,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		if err != nil {
 			return err
 		}
-		wantedPool.Members = append(wantedPool.Members, networkapi.PoolMember{
-			IP: &networkapi.PoolMemberIP{
-				ID:         netIP.ID,
-				IPFormated: tg.IP.String(),
-			},
-			PortReal:     tg.Port,
-			Priority:     1,
-			Weight:       1,
-			MemberStatus: 1,
-		})
+		wantedPool.Members = append(wantedPool.Members, newPoolMember(tg, netIP))
 	}
 
 	vipPool, err := netapiCli.GetPool(ctx, wantedPool.Identifier)
@@ -181,6 +188,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		needsDeploy = true
 		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
 	} else if !vipPool.DeepEqual(*wantedPool) {
+		lg.Info("Updating pool with differences", "diff", pretty.Diff(*vipPool, *wantedPool))
 		needsDeploy = true
 		wantedPool.ID = vipPool.ID
 		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
@@ -213,6 +221,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		needsDeploy = true
 		vip, err = netapiCli.CreateVIP(ctx, wantedVIP)
 	} else if !vip.DeepEqual(*wantedVIP) {
+		lg.Info("Updating vip with differences", "diff", pretty.Diff(*vip, *wantedVIP))
 		needsDeploy = true
 		wantedVIP.ID = vip.ID
 		vip, err = netapiCli.UpdateVIP(ctx, wantedVIP)
@@ -228,10 +237,15 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		}
 	}
 
-	ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
-		{
-			IP: vipIP.ToNetIP().String(),
-		},
+	vipIPStr := vipIP.ToNetIP().String()
+
+	if len(ing.Status.LoadBalancer.Ingress) != 1 || ing.Status.LoadBalancer.Ingress[0].IP != vipIPStr {
+		ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: vipIPStr}}
+		err = r.client.Status().Update(ctx, ing)
+		if err != nil {
+			return err
+		}
 	}
+
 	return r.client.Status().Update(ctx, ing)
 }
