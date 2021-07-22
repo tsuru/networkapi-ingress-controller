@@ -44,7 +44,6 @@ func newPool(name string, cfg config.InstanceConfig) *networkapi.Pool {
 		Identifier:        name,
 		DefaultPort:       80,
 		Environment:       networkapi.IntOrID{ID: cfg.PoolEnvironmentID},
-		EnvironmentVIP:    cfg.VIPEnvironmentID,
 		ServiceDownAction: networkapi.ServiceDownAction{Name: "none"},
 		LBMethod:          "round-robin",
 		HealthCheck: networkapi.HealthCheck{
@@ -96,6 +95,53 @@ func newPoolMember(tg target, netIP *networkapi.IP) networkapi.PoolMember {
 		Priority:     1,
 		Weight:       1,
 		MemberStatus: 0b011,
+	}
+}
+
+func fillPoolUpdate(existingPool, wantedPool *networkapi.Pool) {
+	wantedPool.ID = existingPool.ID
+	wantedPool.PoolCreated = existingPool.PoolCreated
+	existingMemberIPMap := map[int]networkapi.PoolMember{}
+	for _, existingMember := range existingPool.Members {
+		existingMemberIPMap[existingMember.IP.ID] = existingMember
+	}
+
+	for i, wantedMember := range wantedPool.Members {
+		if existingMember, ok := existingMemberIPMap[wantedMember.IP.ID]; ok {
+			wantedMember.ID = existingMember.ID
+			wantedPool.Members[i] = wantedMember
+		}
+	}
+}
+
+func fillVIPUpdate(existingVIP, wantedVIP *networkapi.VIP) {
+	wantedVIP.ID = existingVIP.ID
+	wantedVIP.Created = existingVIP.Created
+
+	existingPortMap := map[int]networkapi.VIPPort{}
+	for _, existingPort := range existingVIP.Ports {
+		existingPortMap[existingPort.Port] = existingPort
+	}
+
+	for i, wantedPort := range wantedVIP.Ports {
+		existingPort, ok := existingPortMap[wantedPort.Port]
+		if !ok {
+			continue
+		}
+		wantedPort.ID = existingPort.ID
+
+		existingPoolMap := map[int]networkapi.VIPPool{}
+		for _, existingPool := range existingPort.Pools {
+			existingPoolMap[existingPool.ServerPool.ID] = existingPool
+		}
+		for j, wantedPool := range wantedPort.Pools {
+			if existingPool, ok := existingPoolMap[wantedPool.ServerPool.ID]; ok {
+				wantedPool.ID = existingPool.ID
+				wantedPort.Pools[j] = wantedPool
+			}
+		}
+
+		wantedVIP.Ports[i] = wantedPort
 	}
 }
 
@@ -182,16 +228,14 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
-	needsDeploy := false
-
 	if networkapi.IsNotFound(err) {
-		needsDeploy = true
 		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
-	} else if !vipPool.DeepEqual(*wantedPool) {
-		lg.Info("Updating pool with differences", "diff", pretty.Diff(*vipPool, *wantedPool))
-		needsDeploy = true
-		wantedPool.ID = vipPool.ID
-		vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
+	} else {
+		fillPoolUpdate(vipPool, wantedPool)
+		if !vipPool.DeepEqual(*wantedPool) {
+			lg.Info("Updating pool with differences", "diff", pretty.Diff(*vipPool, *wantedPool))
+			vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
+		}
 	}
 	if err != nil {
 		return err
@@ -218,19 +262,19 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 	}
 
 	if networkapi.IsNotFound(err) {
-		needsDeploy = true
 		vip, err = netapiCli.CreateVIP(ctx, wantedVIP)
-	} else if !vip.DeepEqual(*wantedVIP) {
-		lg.Info("Updating vip with differences", "diff", pretty.Diff(*vip, *wantedVIP))
-		needsDeploy = true
-		wantedVIP.ID = vip.ID
-		vip, err = netapiCli.UpdateVIP(ctx, wantedVIP)
+	} else {
+		fillVIPUpdate(vip, wantedVIP)
+		if !vip.DeepEqual(*wantedVIP) {
+			lg.Info("Updating vip with differences", "diff", pretty.Diff(*vip, *wantedVIP))
+			vip, err = netapiCli.UpdateVIP(ctx, wantedVIP)
+		}
 	}
 	if err != nil {
 		return err
 	}
 
-	if needsDeploy {
+	if !vip.Created {
 		err = netapiCli.DeployVIP(ctx, vip.ID)
 		if err != nil {
 			return err

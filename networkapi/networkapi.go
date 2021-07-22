@@ -25,15 +25,15 @@ type VIP struct {
 	IPv6           *IntOrID   `json:"ipv6"`
 	Ports          []VIPPort  `json:"ports,omitempty"`
 	Options        VIPOptions `json:"options,omitempty"`
+	Created        bool       `json:"created,omitempty"`
 }
 
 func (v1 VIP) DeepEqual(v2 VIP) bool {
-	v1.ID = 0
-	v2.ID = 0
 	return reflect.DeepEqual(v1, v2)
 }
 
 type VIPPort struct {
+	ID      int            `json:"id,omitempty"`
 	Port    int            `json:"port,omitempty"`
 	Pools   []VIPPool      `json:"pools,omitempty"`
 	Options VIPPortOptions `json:"options,omitempty"`
@@ -47,6 +47,7 @@ type VIPOptions struct {
 }
 
 type VIPPool struct {
+	ID         int     `json:"id,omitempty"`
 	ServerPool IntOrID `json:"server_pool,omitempty"`
 	L7Rule     IntOrID `json:"l7_rule"`
 }
@@ -61,29 +62,15 @@ type Pool struct {
 	Identifier        string            `json:"identifier,omitempty"`
 	DefaultPort       int               `json:"default_port,omitempty"`
 	Environment       IntOrID           `json:"environment,omitempty"`
-	EnvironmentVIP    int               `json:"environmentvip,omitempty"`
 	ServiceDownAction ServiceDownAction `json:"servicedownaction,omitempty"`
 	LBMethod          string            `json:"lb_method,omitempty"`
 	HealthCheck       HealthCheck       `json:"healthcheck,omitempty"`
 	DefaultLimit      int               `json:"default_limit"`
 	Members           []PoolMember      `json:"server_pool_members,omitempty"`
+	PoolCreated       bool              `json:"pool_created,omitempty"`
 }
 
 func (p1 Pool) DeepEqual(p2 Pool) bool {
-	p1.ID = 0
-	p2.ID = 0
-	p1.EnvironmentVIP = 0
-	p2.EnvironmentVIP = 0
-	if len(p1.Members) != len(p2.Members) {
-		return false
-	}
-	for i := range p1.Members {
-		if !p1.Members[i].DeepEqual(p2.Members[i]) {
-			return false
-		}
-	}
-	p1.Members = nil
-	p2.Members = nil
 	return reflect.DeepEqual(p1, p2)
 }
 
@@ -93,6 +80,7 @@ type PoolMemberIP struct {
 }
 
 type PoolMember struct {
+	ID           int           `json:"id,omitempty"`
 	IP           *PoolMemberIP `json:"ip"`
 	IPv6         *PoolMemberIP `json:"ipv6"`
 	Priority     int           `json:"priority"`
@@ -100,14 +88,6 @@ type PoolMember struct {
 	Limit        int           `json:"limit"`
 	PortReal     int           `json:"port_real"`
 	MemberStatus int           `json:"member_status"`
-}
-
-func (m1 PoolMember) DeepEqual(m2 PoolMember) bool {
-	// The third bit in the member status field is read-only and should be
-	// masked when comparing the two members.
-	m1.MemberStatus = m1.MemberStatus & 0b011
-	m2.MemberStatus = m2.MemberStatus & 0b011
-	return reflect.DeepEqual(m1, m2)
 }
 
 type HealthCheck struct {
@@ -261,7 +241,7 @@ func (n *networkAPI) getVIPByID(ctx context.Context, id int) (*VIP, error) {
 }
 
 func (n *networkAPI) CreateVIP(ctx context.Context, vip *VIP) (*VIP, error) {
-	id, err := n.doPostOrPut(ctx, "vip-request", "vips", vip, 0)
+	id, err := n.doPost(ctx, "/api/v3/vip-request/", "vips", vip)
 	if err != nil {
 		return nil, err
 	}
@@ -269,11 +249,23 @@ func (n *networkAPI) CreateVIP(ctx context.Context, vip *VIP) (*VIP, error) {
 }
 
 func (n *networkAPI) UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error) {
-	id, err := n.doPostOrPut(ctx, "vip-request", "vips", vip, vip.ID)
+	body, err := marshalField("vips", []interface{}{vip})
 	if err != nil {
 		return nil, err
 	}
-	return n.getVIPByID(ctx, id)
+	if vip.Created {
+		_, err = n.doRequest(ctx, http.MethodPut, fmt.Sprintf("/api/v3/vip-request/deploy/%d/", vip.ID), nil, body)
+	} else {
+		_, err = n.doRequest(ctx, http.MethodPut, fmt.Sprintf("/api/v3/vip-request/%d/", vip.ID), nil, body)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return n.getVIPByID(ctx, vip.ID)
 }
 
 func (n *networkAPI) DeployVIP(ctx context.Context, vipID int) error {
@@ -329,7 +321,7 @@ func (n *networkAPI) getPoolByID(ctx context.Context, id int) (*Pool, error) {
 }
 
 func (n *networkAPI) CreatePool(ctx context.Context, pool *Pool) (*Pool, error) {
-	id, err := n.doPostOrPut(ctx, "pool", "server_pools", pool, 0)
+	id, err := n.doPost(ctx, "/api/v3/pool/", "server_pools", pool)
 	if err != nil {
 		return nil, err
 	}
@@ -337,11 +329,23 @@ func (n *networkAPI) CreatePool(ctx context.Context, pool *Pool) (*Pool, error) 
 }
 
 func (n *networkAPI) UpdatePool(ctx context.Context, pool *Pool) (*Pool, error) {
-	id, err := n.doPostOrPut(ctx, "pool", "server_pools", pool, pool.ID)
+	body, err := marshalField("server_pools", []interface{}{pool})
 	if err != nil {
 		return nil, err
 	}
-	return n.getPoolByID(ctx, id)
+	if pool.PoolCreated {
+		_, err = n.doRequest(ctx, http.MethodPut, fmt.Sprintf("/api/v3/pool/deploy/%d/", pool.ID), nil, body)
+	} else {
+		_, err = n.doRequest(ctx, http.MethodPut, fmt.Sprintf("/api/v3/pool/%d/", pool.ID), nil, body)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return n.getPoolByID(ctx, pool.ID)
 }
 
 func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error) {
@@ -367,7 +371,7 @@ func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironm
 }
 
 func (n *networkAPI) CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error) {
-	_, err := n.doPostOrPut(ctx, "equipment", "equipments", equip, 0)
+	_, err := n.doPost(ctx, "/api/v3/equipment/", "equipments", equip)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +400,7 @@ func (n *networkAPI) GetEquipment(ctx context.Context, name string) (*Equipment,
 }
 
 func (n *networkAPI) CreateIP(ctx context.Context, ip *IP) (*IP, error) {
-	id, err := n.doPostOrPut(ctx, "ipv4", "ips", ip, 0)
+	id, err := n.doPost(ctx, "/api/v3/ipv4/", "ips", ip)
 	if err != nil {
 		return nil, err
 	}
