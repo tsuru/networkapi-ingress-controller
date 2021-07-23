@@ -25,7 +25,7 @@ type baseClient struct {
 }
 
 func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs url.Values, bodyData []byte) ([]byte, error) {
-	logger := log.FromContext(ctx).V(2).WithValues("method", method)
+	logger := log.FromContext(ctx).WithValues("method", method)
 	var body io.Reader
 	if bodyData != nil {
 		body = bytes.NewReader(bodyData)
@@ -38,7 +38,7 @@ func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs 
 	}
 
 	logger = logger.WithValues("url", fullURL)
-	logger.Info("NetworkAPI request")
+	logger.V(2).Info("NetworkAPI request")
 	req, err := http.NewRequest(method, fullURL, body)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func (c *baseClient) doRequest(ctx context.Context, method string, u string, qs 
 	}
 
 	logger = logger.WithValues("status", resp.StatusCode, "response_body", string(rspData))
-	logger.Info("NetworkAPI response")
+	logger.V(2).Info("NetworkAPI response")
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return nil, errors.Errorf("invalid response %d for %s %s with body %s: %s", resp.StatusCode, method, fullURL, string(bodyData), string(rspData))
