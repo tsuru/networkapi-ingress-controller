@@ -114,6 +114,12 @@ func setDefaults(cfg *Config) {
 	if cfg.IngressClassName == "" {
 		cfg.IngressClassName = defaultIngressClassName
 	}
+	if cfg.NetworkAPIUsername == "" {
+		cfg.NetworkAPIUsername = os.Getenv("NETWORK_API_USERNAME")
+	}
+	if cfg.NetworkAPIPassword == "" {
+		cfg.NetworkAPIPassword = os.Getenv("NETWORK_API_PASSWORD")
+	}
 }
 
 func Get(configFileName string) (Config, error) {
