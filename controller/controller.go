@@ -47,32 +47,29 @@ func (r *reconcileIngress) validateIngress(ing *networkingv1.Ingress) error {
 		return fmt.Errorf("Invalid ingress class detected, predicate failed")
 	}
 
-	if ing.Spec.DefaultBackend == nil && len(ing.Spec.Rules) == 0 {
-		return fmt.Errorf("Ingress must have either default backend or one rule")
-	}
-
-	if ing.Spec.DefaultBackend != nil && len(ing.Spec.Rules) > 0 {
-		return errors.New("Ingress can't have a DefaultBackend and Rules at the same time")
-	}
-
 	services := make(map[string]bool)
+	if backend := ing.Spec.DefaultBackend; backend != nil && backend.Service != nil {
+		if backend.Service.Name == "" {
+			return errors.New("Service backend must have a name")
+		}
+
+		services[backend.Service.Name] = true
+	}
+
 	for _, r := range ing.Spec.Rules {
 		if r.HTTP == nil {
 			continue
 		}
 
-		var p *networkingv1.HTTPIngressPath
-		switch len(r.HTTP.Paths) {
-		case 0:
+		if n := len(r.HTTP.Paths); n != 1 {
+			if n > 1 {
+				return errors.New("Ingress can have only one path")
+			}
+
 			continue
-
-		case 1:
-			p = &r.HTTP.Paths[0]
-
-		default:
-			return errors.New("Ingress can have only one path")
 		}
 
+		p := &r.HTTP.Paths[0]
 		if p.Path != "" && p.Path != "/" && p.Path != "/*" {
 			return errors.New("Ingress path must be unset, / or /*")
 		}
@@ -88,15 +85,14 @@ func (r *reconcileIngress) validateIngress(ing *networkingv1.Ingress) error {
 		services[p.Backend.Service.Name] = true
 	}
 
-	if len(services) > 1 {
+	if n := len(services); n != 1 {
+		if n == 0 {
+			return errors.New("Ingress must have either default backend or one rule")
+		}
+
 		return errors.New("Ingress cannot have different Services by rule")
 	}
 
-	if ing.Spec.DefaultBackend != nil {
-		if ing.Spec.DefaultBackend.Service == nil {
-			return errors.New("Ingress default backend must have a Service")
-		}
-	}
 	return nil
 }
 

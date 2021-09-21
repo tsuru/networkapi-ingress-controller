@@ -41,8 +41,20 @@ func TestReconcileIngress_validateIngress(t *testing.T) {
 					IngressClassName: StringPtr("globo-networkapi"),
 					Rules: []networkingv1.IngressRule{
 						{
-							Host:             "www.example.com",
-							IngressRuleValue: networkingv1.IngressRuleValue{},
+							Host: "www.example.com",
+							IngressRuleValue: networkingv1.IngressRuleValue{
+								HTTP: &networkingv1.HTTPIngressRuleValue{
+									Paths: []networkingv1.HTTPIngressPath{
+										{
+											Backend: networkingv1.IngressBackend{
+												Service: &networkingv1.IngressServiceBackend{
+													Name: "another-service",
+												},
+											},
+										},
+									},
+								},
+							},
 						},
 					},
 					DefaultBackend: &networkingv1.IngressBackend{
@@ -55,7 +67,7 @@ func TestReconcileIngress_validateIngress(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "Ingress can't have a DefaultBackend and Rules at the same time",
+			expectedError: "Ingress cannot have different Services by rule",
 		},
 
 		"with only default backend": {
