@@ -39,30 +39,59 @@ func NewReconciler(client client.Client, evtRecorder record.EventRecorder, cfg c
 }
 
 func (r *reconcileIngress) validateIngress(ing *networkingv1.Ingress) error {
+	if ing == nil {
+		return errors.New("Ingress cannot be nil")
+	}
+
 	if !hasIngressClass(ing, r.cfg.IngressClassName) {
 		return fmt.Errorf("Invalid ingress class detected, predicate failed")
 	}
+
 	if ing.Spec.DefaultBackend == nil && len(ing.Spec.Rules) == 0 {
 		return fmt.Errorf("Ingress must have either default backend or one rule")
 	}
+
 	if ing.Spec.DefaultBackend != nil && len(ing.Spec.Rules) > 0 {
 		return errors.New("Ingress can't have a DefaultBackend and Rules at the same time")
 	}
-	if len(ing.Spec.Rules) > 1 {
-		return errors.New("Ingress can have only one Rule")
-	}
-	if len(ing.Spec.Rules) > 0 && ing.Spec.Rules[0].HTTP != nil {
-		paths := ing.Spec.Rules[0].HTTP.Paths
-		if len(paths) > 1 {
-			return errors.New("Ingress can have only one Path")
+
+	services := make(map[string]bool)
+	for _, r := range ing.Spec.Rules {
+		if r.HTTP == nil {
+			continue
 		}
-		if paths[0].Path != "" && paths[0].Path != "/" && paths[0].Path != "/*" {
+
+		var p *networkingv1.HTTPIngressPath
+		switch len(r.HTTP.Paths) {
+		case 0:
+			continue
+
+		case 1:
+			p = &r.HTTP.Paths[0]
+
+		default:
+			return errors.New("Ingress can have only one path")
+		}
+
+		if p.Path != "" && p.Path != "/" && p.Path != "/*" {
 			return errors.New("Ingress path must be unset, / or /*")
 		}
-		if paths[0].Backend.Service == nil {
+
+		if p.Backend.Service == nil {
 			return errors.New("Ingress path must have a Service")
 		}
+
+		if p.Backend.Service.Name == "" {
+			return errors.New("Service backend must have a name")
+		}
+
+		services[p.Backend.Service.Name] = true
 	}
+
+	if len(services) > 1 {
+		return errors.New("Ingress cannot have different Services by rule")
+	}
+
 	if ing.Spec.DefaultBackend != nil {
 		if ing.Spec.DefaultBackend.Service == nil {
 			return errors.New("Ingress default backend must have a Service")
