@@ -186,7 +186,7 @@ type NetworkAPI interface {
 	GetEquipment(ctx context.Context, name string) (*Equipment, error)
 	DeleteIP(ctx context.Context, id int) error
 	DeletePool(ctx context.Context, id int) error
-	DeleteVIP(ctx context.Context, id int) error
+	DeleteVIP(ctx context.Context, vip *VIP) error
 }
 
 type networkAPI struct {
@@ -488,8 +488,15 @@ func (n *networkAPI) DeletePool(ctx context.Context, id int) error {
 	return n.delete(ctx, "pool", id)
 }
 
-func (n *networkAPI) DeleteVIP(ctx context.Context, id int) error {
-	return n.delete(ctx, "vip-request", id)
+func (n *networkAPI) DeleteVIP(ctx context.Context, vip *VIP) error {
+	if vip.Created {
+		_, err := n.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/v3/vip-request/deploy/%d/", vip.ID), nil, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	return n.delete(ctx, "vip-request", vip.ID)
 }
 
 func Client(baseURL, user, password string) NetworkAPI {

@@ -161,7 +161,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 		return err
 	}
 	if !networkapi.IsNotFound(err) {
-		if err = netapiCli.DeleteVIP(ctx, vip.ID); err != nil {
+		if err = netapiCli.DeleteVIP(ctx, vip); err != nil {
 			return err
 		}
 	}
