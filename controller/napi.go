@@ -17,8 +17,8 @@ func (r *reconcileIngress) vipName(ing types.NamespacedName) string {
 	return fmt.Sprintf("%s_%s_%s_%s", config.IngressControllerName, r.cfg.ClusterName, ing.Namespace, ing.Name)
 }
 
-func (r *reconcileIngress) poolName(ing types.NamespacedName) string {
-	return r.vipName(ing)
+func (r *reconcileIngress) httpPoolName(ing types.NamespacedName) string {
+	return fmt.Sprintf("%s_http", r.vipName(ing))
 }
 
 func (r *reconcileIngress) httpsPoolName(ing types.NamespacedName) string {
@@ -193,13 +193,13 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 		}
 	}
 
-	poolName := r.poolName(ingName)
-	pool, err := netapiCli.GetPool(ctx, poolName)
+	httpPool, err := netapiCli.GetPool(ctx, r.httpPoolName(ingName))
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}
+
 	if !networkapi.IsNotFound(err) {
-		if err = netapiCli.DeletePool(ctx, pool.ID); err != nil {
+		if err = netapiCli.DeletePool(ctx, httpPool.ID); err != nil {
 			return err
 		}
 	}
@@ -214,7 +214,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 
 	instCfg := config.FromInstance(ing, r.cfg)
 
-	wantedHTTPPool := newPool(r.poolName(namespacedName(ing)), 80, instCfg)
+	wantedHTTPPool := newPool(r.httpPoolName(namespacedName(ing)), 80, instCfg)
 	wantedHTTPSPool := newPool(r.httpsPoolName(namespacedName(ing)), 443, instCfg)
 
 	for _, tg := range targets {
