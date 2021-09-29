@@ -21,6 +21,10 @@ func (r *reconcileIngress) poolName(ing types.NamespacedName) string {
 	return r.vipName(ing)
 }
 
+func (r *reconcileIngress) httpsPoolName(ing types.NamespacedName) string {
+	return fmt.Sprintf("%s_https", r.vipName(ing))
+}
+
 func (r *reconcileIngress) targetName(tg target) string {
 	return fmt.Sprintf("%s_%s_%s", config.IngressControllerName, r.cfg.ClusterName, tg.IP.String())
 }
@@ -39,10 +43,10 @@ func newEquipment(name string, cfg config.InstanceConfig) *networkapi.Equipment 
 	}
 }
 
-func newPool(name string, cfg config.InstanceConfig) *networkapi.Pool {
+func newPool(name string, port int, cfg config.InstanceConfig) *networkapi.Pool {
 	return &networkapi.Pool{
 		Identifier:        name,
-		DefaultPort:       80,
+		DefaultPort:       port,
 		Environment:       networkapi.IntOrID{ID: cfg.PoolEnvironmentID},
 		ServiceDownAction: networkapi.ServiceDownAction{Name: "none"},
 		LBMethod:          "round-robin",
@@ -54,7 +58,7 @@ func newPool(name string, cfg config.InstanceConfig) *networkapi.Pool {
 	}
 }
 
-func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, pool *networkapi.Pool) *networkapi.VIP {
+func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, http, https *networkapi.Pool) *networkapi.VIP {
 	return &networkapi.VIP{
 		Name:           name,
 		Service:        name,
@@ -66,7 +70,20 @@ func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, pool *ne
 				Port: 80,
 				Pools: []networkapi.VIPPool{
 					{
-						ServerPool: networkapi.IntOrID{ID: pool.ID},
+						ServerPool: networkapi.IntOrID{ID: http.ID},
+						L7Rule:     networkapi.IntOrID{ID: cfg.VIPL7RuleID},
+					},
+				},
+				Options: networkapi.VIPPortOptions{
+					L4Protocol: networkapi.IntOrID{ID: cfg.VIPL4ProtocolID},
+					L7Protocol: networkapi.IntOrID{ID: cfg.VIPL7ProtocolID},
+				},
+			},
+			{
+				Port: 443,
+				Pools: []networkapi.VIPPool{
+					{
+						ServerPool: networkapi.IntOrID{ID: https.ID},
 						L7Rule:     networkapi.IntOrID{ID: cfg.VIPL7RuleID},
 					},
 				},
@@ -196,7 +213,10 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
 
 	instCfg := config.FromInstance(ing, r.cfg)
-	wantedPool := newPool(r.poolName(namespacedName(ing)), instCfg)
+
+	wantedHTTPPool := newPool(r.poolName(namespacedName(ing)), 80, instCfg)
+	wantedHTTPSPool := newPool(r.httpsPoolName(namespacedName(ing)), 443, instCfg)
+
 	for _, tg := range targets {
 		targetName := r.targetName(tg)
 
@@ -220,21 +240,48 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		if err != nil {
 			return err
 		}
-		wantedPool.Members = append(wantedPool.Members, newPoolMember(tg, netIP))
+
+		member := newPoolMember(tg, netIP)
+
+		if tg.TLS {
+			wantedHTTPSPool.Members = append(wantedHTTPSPool.Members, member)
+		} else {
+			wantedHTTPPool.Members = append(wantedHTTPPool.Members, member)
+		}
 	}
 
-	vipPool, err := netapiCli.GetPool(ctx, wantedPool.Identifier)
+	httpPool, err := netapiCli.GetPool(ctx, wantedHTTPPool.Identifier)
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}
 
 	if networkapi.IsNotFound(err) {
-		vipPool, err = netapiCli.CreatePool(ctx, wantedPool)
+		httpPool, err = netapiCli.CreatePool(ctx, wantedHTTPPool)
 	} else {
-		fillPoolUpdate(vipPool, wantedPool)
-		if !vipPool.DeepEqual(*wantedPool) {
-			lg.Info("Updating pool with differences", "diff", pretty.Diff(*vipPool, *wantedPool))
-			vipPool, err = netapiCli.UpdatePool(ctx, wantedPool)
+		fillPoolUpdate(httpPool, wantedHTTPPool)
+
+		if !httpPool.DeepEqual(*wantedHTTPPool) {
+			lg.Info("Updating pool with differences", "diff", pretty.Diff(*httpPool, *wantedHTTPPool))
+			httpPool, err = netapiCli.UpdatePool(ctx, wantedHTTPPool)
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	httpsPool, err := netapiCli.GetPool(ctx, wantedHTTPSPool.Identifier)
+	if err != nil && !networkapi.IsNotFound(err) {
+		return err
+	}
+
+	if networkapi.IsNotFound(err) {
+		httpsPool, err = netapiCli.CreatePool(ctx, wantedHTTPSPool)
+	} else {
+		fillPoolUpdate(httpsPool, wantedHTTPSPool)
+
+		if !httpsPool.DeepEqual(*wantedHTTPSPool) {
+			lg.Info("Updating pool with differences", "diff", pretty.Diff(*httpsPool, *wantedHTTPSPool))
+			httpsPool, err = netapiCli.UpdatePool(ctx, wantedHTTPSPool)
 		}
 	}
 	if err != nil {
@@ -254,7 +301,7 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
-	wantedVIP := newVIP(vipName, instCfg, vipIP, vipPool)
+	wantedVIP := newVIP(vipName, instCfg, vipIP, httpPool, httpsPool)
 
 	vip, err := netapiCli.GetVIP(ctx, wantedVIP.Name)
 	if err != nil && !networkapi.IsNotFound(err) {

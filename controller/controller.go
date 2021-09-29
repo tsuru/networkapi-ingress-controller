@@ -96,14 +96,21 @@ func (r *reconcileIngress) validateIngress(ing *networkingv1.Ingress) error {
 	return nil
 }
 
-func backendFromIngress(ing *networkingv1.Ingress) *networkingv1.IngressServiceBackend {
+func backendsFromIngress(ing *networkingv1.Ingress) (backends []*networkingv1.IngressServiceBackend) {
 	if len(ing.Spec.Rules) > 0 && ing.Spec.Rules[0].HTTP != nil && len(ing.Spec.Rules[0].HTTP.Paths) > 0 {
-		return ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service
+		backends = append(backends, ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service)
+	} else if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
+		backends = append(backends, ing.Spec.DefaultBackend.Service)
 	}
-	if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
-		return ing.Spec.DefaultBackend.Service
+
+	if len(backends) > 0 && len(ing.Spec.TLS) > 0 {
+		backends = append(backends, &networkingv1.IngressServiceBackend{
+			Name: backends[0].Name,
+			Port: networkingv1.ServiceBackendPort{Number: int32(443)},
+		})
 	}
-	return nil
+
+	return
 }
 
 func namespacedName(obj metav1.Object) types.NamespacedName {
@@ -113,15 +120,15 @@ func namespacedName(obj metav1.Object) types.NamespacedName {
 	}
 }
 
-func (r *reconcileIngress) svcAndPortFromIngress(ctx context.Context, ing *networkingv1.Ingress) (*corev1.Service, *corev1.ServicePort, error) {
-	backend := backendFromIngress(ing)
-	if backend == nil {
+func (r *reconcileIngress) svcAndPortFromIngress(ctx context.Context, ing *networkingv1.Ingress) (*corev1.Service, []corev1.ServicePort, error) {
+	backends := backendsFromIngress(ing)
+	if len(backends) == 0 {
 		return nil, nil, errors.Errorf("ingress has no backends")
 	}
 
 	svcFullName := types.NamespacedName{
+		Name:      backends[0].Name,
 		Namespace: ing.Namespace,
-		Name:      backend.Name,
 	}
 	svc := &corev1.Service{}
 	err := r.client.Get(ctx, svcFullName, svc)
@@ -137,51 +144,51 @@ func (r *reconcileIngress) svcAndPortFromIngress(ctx context.Context, ing *netwo
 		return nil, nil, errors.Errorf("backend service %s has no ports", svcFullName.String())
 	}
 
-	var port *corev1.ServicePort
+	var ports []corev1.ServicePort
 	for _, p := range svc.Spec.Ports {
-		if backend.Port.Name == p.Name || backend.Port.Number == p.Port {
-			port = &p
-			break
+		for _, b := range backends {
+			if (b.Port.Name != "" && b.Port.Name == p.Name) || b.Port.Number == p.Port {
+				ports = append(ports, p)
+			}
 		}
 	}
 
-	if port == nil {
-		hasExplicitPort := backend.Port.Name != "" || backend.Port.Number != 0
-		if hasExplicitPort {
-			return nil, nil, errors.Errorf("backend service %s has no port matching %#v", svcFullName.String(), backend.Port)
-		}
-		if len(svc.Spec.Ports) > 1 {
-			return nil, nil, errors.Errorf("backend service %s has more than one port, ingress must choose one", svcFullName.String())
-		}
-		for _, p := range svc.Spec.Ports {
-			port = &p
-		}
+	if len(ports) == 0 {
+		return nil, nil, errors.Errorf("cannot match backend port with service ports")
 	}
 
-	return svc, port, nil
+	return svc, ports, nil
 }
 
 type target struct {
 	IP        net.IP
 	Port      int
 	NetworkID int
+	TLS       bool
 }
 
-func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Service, port *corev1.ServicePort) ([]target, error) {
+func (r *reconcileIngress) targetsForService(ctx context.Context, ing *networkingv1.Ingress, svc *corev1.Service, ports []corev1.ServicePort) ([]target, error) {
 	var targets []target
 
 	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
 		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			return targets, nil
 		}
+
 		ip := svc.Status.LoadBalancer.Ingress[0].IP
-		if ip != "" {
+		if ip == "" {
+			return targets, nil
+		}
+
+		for _, p := range ports {
 			targets = append(targets, target{
 				IP:        net.ParseIP(ip),
-				Port:      int(port.Port),
+				Port:      int(p.Port),
+				TLS:       p.Port == int32(443),
 				NetworkID: r.cfg.LBNetworkID,
 			})
 		}
+
 		return targets, nil
 	}
 
@@ -191,28 +198,40 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, svc *corev1.Se
 		return nil, errors.Wrap(err, "could not fetch endpoints")
 	}
 
-	var svcPortNumber int32
-	if port.TargetPort.IntVal == 0 && port.TargetPort.StrVal == "" {
-		svcPortNumber = port.Port
-	}
+	for _, p := range ports {
+		var svcPortNumber int32
+		if p.TargetPort.IntVal == 0 && p.TargetPort.StrVal == "" {
+			svcPortNumber = p.Port
+		}
 
-	for _, subset := range endpoints.Subsets {
-		var portNumber int
-		for _, subsetPort := range subset.Ports {
-			if (port.Name != "" && port.Name == subsetPort.Name) || svcPortNumber == subsetPort.Port {
-				portNumber = int(subsetPort.Port)
-				break
+		for _, s := range endpoints.Subsets {
+			var portNumber int
+			for _, sp := range s.Ports {
+				if p.Name != "" && p.Name == sp.Name {
+					portNumber = int(sp.Port)
+					break
+				}
+
+				if svcPortNumber == sp.Port {
+					portNumber = int(sp.Port)
+					break
+				}
 			}
-		}
-		if portNumber == 0 {
-			continue
-		}
-		for _, address := range subset.Addresses {
-			ip := net.ParseIP(address.IP)
-			if ip != nil {
+
+			if portNumber == 0 {
+				continue
+			}
+
+			for _, address := range s.Addresses {
+				ip := net.ParseIP(address.IP)
+				if len(ip) == 0 {
+					continue
+				}
+
 				targets = append(targets, target{
 					IP:        ip,
 					Port:      portNumber,
+					TLS:       p.Port == int32(443),
 					NetworkID: r.cfg.PodNetworkID,
 				})
 			}
@@ -238,7 +257,7 @@ func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networking
 	}
 	r.serviceWatcher.addIngressService(namespacedName(ing), namespacedName(svc))
 
-	targets, err := r.targetsForService(ctx, svc, port)
+	targets, err := r.targetsForService(ctx, ing, svc, port)
 	if err != nil {
 		return result, err
 	}
