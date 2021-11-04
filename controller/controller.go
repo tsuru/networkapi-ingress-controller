@@ -7,6 +7,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/tsuru/networkapi-ingress-controller/config"
+	"github.com/tsuru/networkapi-ingress-controller/networkapi"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,10 +22,11 @@ import (
 var _ reconcile.Reconciler = &reconcileIngress{}
 
 type reconcileIngress struct {
-	client         client.Client
-	serviceWatcher *serviceWatcher
-	cfg            config.Config
-	events         record.EventRecorder
+	client           client.Client
+	serviceWatcher   *serviceWatcher
+	cfg              config.Config
+	events           record.EventRecorder
+	networkAPIClient networkapi.NetworkAPI
 }
 
 func NewReconciler(client client.Client, evtRecorder record.EventRecorder, cfg config.Config) *reconcileIngress {
@@ -268,10 +270,16 @@ func (r *reconcileIngress) reconcileIngress(ctx context.Context, ing *networking
 
 func (r *reconcileIngress) cleanUp(ctx context.Context, ingName types.NamespacedName, ing *networkingv1.Ingress) (reconcile.Result, error) {
 	var result reconcile.Result
-	err := r.cleanupNetworkAPI(ctx, ingName)
-	if err != nil {
-		return result, err
+
+	if takeOverVIPName := ing.Annotations[config.TakeOverAnnotation]; takeOverVIPName != "" {
+		// We wont remove the VIP, cause we use take over
+	} else {
+		err := r.cleanupNetworkAPI(ctx, ingName)
+		if err != nil {
+			return result, err
+		}
 	}
+
 	if ing == nil {
 		r.serviceWatcher.removeIngress(ingName)
 		return result, nil
@@ -284,7 +292,7 @@ func (r *reconcileIngress) cleanUp(ctx context.Context, ingName types.Namespaced
 		}
 	}
 	ing.ObjectMeta.Finalizers = newFinalizers
-	err = r.client.Update(ctx, ing)
+	err := r.client.Update(ctx, ing)
 	if err != nil {
 		return result, err
 	}

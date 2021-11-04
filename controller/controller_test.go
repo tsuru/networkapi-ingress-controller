@@ -1,11 +1,23 @@
 package controller
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tsuru/networkapi-ingress-controller/config"
+	"github.com/tsuru/networkapi-ingress-controller/networkapi"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func TestReconcileIngress_validateIngress(t *testing.T) {
@@ -290,6 +302,118 @@ func TestReconcileIngress_validateIngress(t *testing.T) {
 			assert.EqualError(t, got, tt.expectedError)
 		})
 	}
+}
+
+func TestReconcileTakeOver(t *testing.T) {
+	fakeNetworkAPIClient := &networkapi.FakeNetworkAPI{
+		VIPs: map[string]networkapi.VIP{
+			"vip-blah": {
+				Name: "vip-blah",
+				Ports: []networkapi.VIPPort{
+					{
+						ID:   29,
+						Port: 80,
+						Pools: []networkapi.VIPPool{
+							{
+								ID: 10,
+								ServerPool: networkapi.IntOrID{
+									ID: 111,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		IPsByName: map[string]networkapi.IP{
+			"vip-blah": {
+				ID:   42,
+				Oct1: 100,
+				Oct2: 10,
+				Oct3: 10,
+				Oct4: 10,
+			},
+		},
+	}
+
+	ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ingress-1",
+			Namespace: "default",
+			Annotations: map[string]string{
+				config.TakeOverAnnotation: "vip-blah",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: StringPtr("globo-networkapi"),
+			DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: "example-service",
+					Port: networkingv1.ServiceBackendPort{
+						Number: int32(80),
+					},
+				},
+			},
+		},
+	}
+
+	service1 := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-service",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{
+				{
+					Name: "http",
+					Port: 80,
+				},
+			},
+		},
+	}
+
+	endpoints1 := &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-service",
+			Namespace: "default",
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(ingress, service1, endpoints1).Build()
+
+	r := NewReconciler(
+		client,
+		&record.FakeRecorder{
+			Events: make(chan string, 10000),
+		},
+		config.Config{
+			IngressClassName: "globo-networkapi",
+		},
+	)
+	r.networkAPIClient = fakeNetworkAPIClient
+
+	ctx := log.IntoContext(context.TODO(), zap.New(zap.UseDevMode(true)))
+
+	_, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      ingress.Name,
+			Namespace: ingress.Namespace,
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, fakeNetworkAPIClient.VIPDeploys, 1)
+	assert.Len(t, fakeNetworkAPIClient.VIPUpdates, 1)
+
+	updatedIngress := &networkingv1.Ingress{}
+	err = client.Get(ctx, types.NamespacedName{
+		Name:      ingress.Name,
+		Namespace: ingress.Namespace,
+	}, updatedIngress)
+	require.NoError(t, err)
+	assert.Equal(t, "100.10.10.10", updatedIngress.Status.LoadBalancer.Ingress[0].IP)
 }
 
 func StringPtr(s string) *string {

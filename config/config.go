@@ -15,6 +15,7 @@ import (
 const (
 	IngressControllerName   = "kube-napi-ingress"
 	FinalizerName           = IngressControllerName + ".tsuru.io/cleanup"
+	TakeOverAnnotation      = IngressControllerName + ".tsuru.io/take-over-vip-name"
 	defaultIngressClassName = "globo-networkapi"
 	annotationsConfigPrefix = IngressControllerName + ".tsuru.io/"
 )
