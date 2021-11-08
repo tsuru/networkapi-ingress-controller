@@ -10,9 +10,9 @@ import (
 var _ NetworkAPI = &FakeNetworkAPI{}
 
 type FakeNetworkAPI struct {
-	Pools     map[string]Pool
-	IPsByName map[string]IP
-	VIPs      map[string]VIP
+	Pools   map[string]Pool
+	IPsByID map[int]IP
+	VIPs    map[string]VIP
 
 	VIPUpdates []VIP
 	VIPDeploys []int
@@ -76,19 +76,23 @@ func (f *FakeNetworkAPI) CreateIP(ctx context.Context, ip *IP) (*IP, error) {
 }
 
 func (f *FakeNetworkAPI) GetIPByName(ctx context.Context, name string) (*IP, error) {
-	if f.IPsByName == nil {
-		return nil, errNotFound
-	}
-
-	ip, ok := f.IPsByName[name]
-	if !ok {
-		return nil, errNotFound
-	}
-	return &ip, nil
+	return nil, errors.New("GetIPByID is not implemented yet")
 }
 
 func (f *FakeNetworkAPI) GetIPByNetIP(ctx context.Context, ip net.IP) (*IP, error) {
 	return nil, errors.New("GetIPByNetIP is not implemented yet")
+}
+
+func (f *FakeNetworkAPI) GetIPByID(ctx context.Context, id int) (*IP, error) {
+	if f.IPsByID == nil {
+		return nil, errNotFound
+	}
+
+	ip, ok := f.IPsByID[id]
+	if !ok {
+		return nil, errNotFound
+	}
+	return &ip, nil
 }
 
 func (f *FakeNetworkAPI) CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error) {

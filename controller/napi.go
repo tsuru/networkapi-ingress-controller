@@ -59,13 +59,13 @@ func newPool(name string, port int, cfg config.InstanceConfig) *networkapi.Pool 
 	}
 }
 
-func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, http, https *networkapi.Pool) *networkapi.VIP {
+func newVIP(name string, cfg config.InstanceConfig, vipIP *networkapi.IP, http, https *networkapi.Pool) *networkapi.VIP {
 	return &networkapi.VIP{
 		Name:           name,
 		Service:        name,
 		Business:       "tsuru gke",
 		EnvironmentVIP: networkapi.IntOrID{ID: cfg.VIPEnvironmentID},
-		IPv4:           &networkapi.IntOrID{ID: vip.ID},
+		IPv4:           &networkapi.IntOrID{ID: vipIP.ID},
 		Ports: []networkapi.VIPPort{
 			{
 				Port: 80,
@@ -373,7 +373,11 @@ func (r *reconcileIngress) reconcileNetworkAPITakeOver(ctx context.Context, take
 		return err
 	}
 
-	vipIP, err := netapiCli.GetIPByName(ctx, vip.Name)
+	if vip.IPv4 == nil {
+		return errors.New("no ipv4 found")
+	}
+
+	vipIP, err := netapiCli.GetIPByID(ctx, vip.IPv4.ID)
 	if err != nil && !networkapi.IsNotFound(err) {
 		return err
 	}

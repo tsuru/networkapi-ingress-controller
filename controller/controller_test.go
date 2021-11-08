@@ -323,11 +323,14 @@ func TestReconcileTakeOver(t *testing.T) {
 						},
 					},
 				},
+				IPv4: &networkapi.IntOrID{
+					ID: 8000,
+				},
 			},
 		},
-		IPsByName: map[string]networkapi.IP{
-			"vip-blah": {
-				ID:   42,
+		IPsByID: map[int]networkapi.IP{
+			8000: {
+				ID:   8000,
 				Oct1: 100,
 				Oct2: 10,
 				Oct3: 10,

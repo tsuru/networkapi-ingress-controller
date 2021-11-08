@@ -15,6 +15,26 @@ import (
 
 var errNotFound = errors.New("not found")
 
+type NetworkAPI interface {
+	GetVIP(ctx context.Context, name string) (*VIP, error)
+	CreateVIP(ctx context.Context, vip *VIP) (*VIP, error)
+	UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error)
+	DeployVIP(ctx context.Context, vipID int) error
+	GetPool(ctx context.Context, name string) (*Pool, error)
+	CreatePool(ctx context.Context, pool *Pool) (*Pool, error)
+	UpdatePool(ctx context.Context, pool *Pool) (*Pool, error)
+	CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error)
+	CreateIP(ctx context.Context, ip *IP) (*IP, error)
+	GetIPByID(ctx context.Context, id int) (*IP, error)
+	GetIPByName(ctx context.Context, name string) (*IP, error)
+	GetIPByNetIP(ctx context.Context, ip net.IP) (*IP, error)
+	CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error)
+	GetEquipment(ctx context.Context, name string) (*Equipment, error)
+	DeleteIP(ctx context.Context, id int) error
+	DeletePool(ctx context.Context, id int) error
+	DeleteVIP(ctx context.Context, vip *VIP) error
+}
+
 type VIP struct {
 	ID             int        `json:"id,omitempty"`
 	Name           string     `json:"name,omitempty"`
@@ -168,25 +188,6 @@ func IPFromNetIP(netIP net.IP) IP {
 
 func (ip *IP) ToNetIP() net.IP {
 	return net.IPv4(ip.Oct1, ip.Oct2, ip.Oct3, ip.Oct4)
-}
-
-type NetworkAPI interface {
-	GetVIP(ctx context.Context, name string) (*VIP, error)
-	CreateVIP(ctx context.Context, vip *VIP) (*VIP, error)
-	UpdateVIP(ctx context.Context, vip *VIP) (*VIP, error)
-	DeployVIP(ctx context.Context, vipID int) error
-	GetPool(ctx context.Context, name string) (*Pool, error)
-	CreatePool(ctx context.Context, pool *Pool) (*Pool, error)
-	UpdatePool(ctx context.Context, pool *Pool) (*Pool, error)
-	CreateVIPIPv4(ctx context.Context, name string, vipEnvironmentID int) (*IP, error)
-	CreateIP(ctx context.Context, ip *IP) (*IP, error)
-	GetIPByName(ctx context.Context, name string) (*IP, error)
-	GetIPByNetIP(ctx context.Context, ip net.IP) (*IP, error)
-	CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error)
-	GetEquipment(ctx context.Context, name string) (*Equipment, error)
-	DeleteIP(ctx context.Context, id int) error
-	DeletePool(ctx context.Context, id int) error
-	DeleteVIP(ctx context.Context, vip *VIP) error
 }
 
 type networkAPI struct {
@@ -365,7 +366,7 @@ func (n *networkAPI) CreateVIPIPv4(ctx context.Context, name string, vipEnvironm
 		return nil, errors.Wrapf(err, "unable to unmarshal %q", string(data))
 	}
 	if xmlData.IP.ID != 0 {
-		return n.getIPByID(ctx, xmlData.IP.ID)
+		return n.GetIPByID(ctx, xmlData.IP.ID)
 	}
 	return nil, errors.Errorf("unable to parse ID from %q", string(data))
 }
@@ -404,7 +405,7 @@ func (n *networkAPI) CreateIP(ctx context.Context, ip *IP) (*IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	return n.getIPByID(ctx, id)
+	return n.GetIPByID(ctx, id)
 }
 
 func parseIP(data []byte) (*IP, error) {
@@ -422,7 +423,7 @@ func parseIP(data []byte) (*IP, error) {
 	return &result[0], nil
 }
 
-func (n *networkAPI) getIPByID(ctx context.Context, id int) (*IP, error) {
+func (n *networkAPI) GetIPByID(ctx context.Context, id int) (*IP, error) {
 	u := fmt.Sprintf("/api/v3/ipv4/%d/", id)
 	data, err := n.doRequest(ctx, http.MethodGet, u, nil, nil)
 	if err != nil {
