@@ -363,10 +363,7 @@ func (r *reconcileIngress) deployAndUpdateStatus(ctx context.Context, ing *netwo
 func (r *reconcileIngress) reconcileNetworkAPITakeOver(ctx context.Context, takeOverVIPName string, ing *networkingv1.Ingress, httpPool, httpsPool *networkapi.Pool) error {
 	lg := log.FromContext(ctx)
 
-	netapiCli := r.networkAPIClient
-	if netapiCli == nil {
-		netapiCli = networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
-	}
+	netapiCli := r.getNetworkAPI()
 
 	vip, err := netapiCli.GetVIP(ctx, takeOverVIPName)
 	if err != nil {
