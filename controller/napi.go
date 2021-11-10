@@ -367,7 +367,7 @@ func (r *reconcileIngress) reconcileNetworkAPITakeOver(ctx context.Context, take
 
 	vip, err := netapiCli.GetVIP(ctx, takeOverVIPName)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "could not get VIP")
 	}
 
 	if vip.IPv4 == nil {
@@ -375,12 +375,8 @@ func (r *reconcileIngress) reconcileNetworkAPITakeOver(ctx context.Context, take
 	}
 
 	vipIP, err := netapiCli.GetIPByID(ctx, vip.IPv4.ID)
-	if err != nil && !networkapi.IsNotFound(err) {
-		return err
-	}
-
-	if vipIP == nil {
-		return errors.New("vip name not found")
+	if err != nil {
+		return errors.Wrap(err, "could not get VIP IP")
 	}
 
 	instCfg := config.FromInstance(ing, r.cfg)
