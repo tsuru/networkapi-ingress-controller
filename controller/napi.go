@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/kr/pretty"
+	"github.com/pkg/errors"
 	"github.com/tsuru/networkapi-ingress-controller/config"
 	"github.com/tsuru/networkapi-ingress-controller/networkapi"
 	corev1 "k8s.io/api/core/v1"
@@ -58,13 +59,13 @@ func newPool(name string, port int, cfg config.InstanceConfig) *networkapi.Pool 
 	}
 }
 
-func newVIP(name string, cfg config.InstanceConfig, vip *networkapi.IP, http, https *networkapi.Pool) *networkapi.VIP {
+func newVIP(name string, cfg config.InstanceConfig, vipIP *networkapi.IP, http, https *networkapi.Pool) *networkapi.VIP {
 	return &networkapi.VIP{
 		Name:           name,
 		Service:        name,
 		Business:       "tsuru gke",
 		EnvironmentVIP: networkapi.IntOrID{ID: cfg.VIPEnvironmentID},
-		IPv4:           &networkapi.IntOrID{ID: vip.ID},
+		IPv4:           &networkapi.IntOrID{ID: vipIP.ID},
 		Ports: []networkapi.VIPPort{
 			{
 				Port: 80,
@@ -162,6 +163,14 @@ func fillVIPUpdate(existingVIP, wantedVIP *networkapi.VIP) {
 	}
 }
 
+func (r *reconcileIngress) getNetworkAPI() networkapi.NetworkAPI {
+	if r.networkAPIClient != nil {
+		return r.networkAPIClient
+	}
+
+	return networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
+}
+
 func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.NamespacedName) error {
 	lg := log.FromContext(ctx)
 	if r.cfg.DebugDisableCleanup {
@@ -169,7 +178,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 		return nil
 	}
 
-	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
+	netapiCli := r.getNetworkAPI()
 
 	vipName := r.vipName(ingName)
 
@@ -210,7 +219,7 @@ func (r *reconcileIngress) cleanupNetworkAPI(ctx context.Context, ingName types.
 func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *networkingv1.Ingress, targets []target) error {
 	lg := log.FromContext(ctx)
 
-	netapiCli := networkapi.Client(r.cfg.NetworkAPIURL, r.cfg.NetworkAPIUsername, r.cfg.NetworkAPIPassword)
+	netapiCli := r.getNetworkAPI()
 
 	instCfg := config.FromInstance(ing, r.cfg)
 
@@ -288,6 +297,10 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
+	if takeOverVIPName := ing.Annotations[config.TakeOverAnnotation]; takeOverVIPName != "" {
+		return r.reconcileNetworkAPITakeOver(ctx, takeOverVIPName, ing, httpPool, httpsPool)
+	}
+
 	vipName := r.vipName(namespacedName(ing))
 
 	vipIP, err := netapiCli.GetIPByName(ctx, vipName)
@@ -321,8 +334,14 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 		return err
 	}
 
+	return r.deployAndUpdateStatus(ctx, ing, vip, vipIP)
+}
+
+func (r *reconcileIngress) deployAndUpdateStatus(ctx context.Context, ing *networkingv1.Ingress, vip *networkapi.VIP, vipIP *networkapi.IP) error {
+	netapiCli := r.getNetworkAPI()
+
 	if !vip.Created {
-		err = netapiCli.DeployVIP(ctx, vip.ID)
+		err := netapiCli.DeployVIP(ctx, vip.ID)
 		if err != nil {
 			return err
 		}
@@ -332,11 +351,46 @@ func (r *reconcileIngress) reconcileNetworkAPI(ctx context.Context, ing *network
 
 	if len(ing.Status.LoadBalancer.Ingress) != 1 || ing.Status.LoadBalancer.Ingress[0].IP != vipIPStr {
 		ing.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: vipIPStr}}
-		err = r.client.Status().Update(ctx, ing)
+		err := r.client.Status().Update(ctx, ing)
 		if err != nil {
 			return err
 		}
 	}
 
 	return r.client.Status().Update(ctx, ing)
+}
+
+func (r *reconcileIngress) reconcileNetworkAPITakeOver(ctx context.Context, takeOverVIPName string, ing *networkingv1.Ingress, httpPool, httpsPool *networkapi.Pool) error {
+	lg := log.FromContext(ctx)
+
+	netapiCli := r.getNetworkAPI()
+
+	vip, err := netapiCli.GetVIP(ctx, takeOverVIPName)
+	if err != nil {
+		return errors.Wrap(err, "could not get VIP")
+	}
+
+	if vip.IPv4 == nil {
+		return errors.New("no ipv4 found")
+	}
+
+	vipIP, err := netapiCli.GetIPByID(ctx, vip.IPv4.ID)
+	if err != nil {
+		return errors.Wrap(err, "could not get VIP IP")
+	}
+
+	instCfg := config.FromInstance(ing, r.cfg)
+
+	wantedVIP := newVIP(vip.Name, instCfg, vipIP, httpPool, httpsPool)
+
+	fillVIPUpdate(vip, wantedVIP)
+
+	if !vip.DeepEqual(*wantedVIP) {
+		lg.Info("Updating vip with differences", "diff", pretty.Diff(*vip, *wantedVIP))
+		vip, err = netapiCli.UpdateVIP(ctx, wantedVIP)
+		if err != nil {
+			return err
+		}
+	}
+	return r.deployAndUpdateStatus(ctx, ing, vip, vipIP)
 }
