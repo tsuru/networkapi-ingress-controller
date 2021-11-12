@@ -146,7 +146,10 @@ func fillVIPUpdate(existingVIP, wantedVIP *networkapi.VIP) {
 		if !ok {
 			continue
 		}
-		wantedPort.ID = existingPort.ID
+
+		if wantedPort.Options == existingPort.Options {
+			wantedPort.ID = existingPort.ID
+		}
 
 		existingPoolMap := map[int]networkapi.VIPPool{}
 		for _, existingPool := range existingPort.Pools {
