@@ -10,9 +10,10 @@ import (
 var _ NetworkAPI = &FakeNetworkAPI{}
 
 type FakeNetworkAPI struct {
-	Pools   map[string]Pool
-	IPsByID map[int]IP
-	VIPs    map[string]VIP
+	Pools      map[string]Pool
+	IPsByID    map[int]IP
+	VIPs       map[string]VIP
+	Equipments map[string]Equipment
 
 	VIPUpdates []VIP
 	VIPDeploys []int
@@ -80,7 +81,14 @@ func (f *FakeNetworkAPI) GetIPByName(ctx context.Context, name string) (*IP, err
 }
 
 func (f *FakeNetworkAPI) GetIPByNetIP(ctx context.Context, ip net.IP) (*IP, error) {
-	return nil, errors.New("GetIPByNetIP is not implemented yet")
+
+	return &IP{
+		ID:   1,
+		Oct1: ip.To4()[0],
+		Oct2: ip.To4()[1],
+		Oct3: ip.To4()[2],
+		Oct4: ip.To4()[3],
+	}, nil
 }
 
 func (f *FakeNetworkAPI) GetIPByID(ctx context.Context, id int) (*IP, error) {
@@ -96,11 +104,22 @@ func (f *FakeNetworkAPI) GetIPByID(ctx context.Context, id int) (*IP, error) {
 }
 
 func (f *FakeNetworkAPI) CreateEquipment(ctx context.Context, equip *Equipment) (*Equipment, error) {
-	return nil, errors.New("CreateEquipment is not implemented yet")
+	if f.Equipments == nil {
+		f.Equipments = make(map[string]Equipment)
+	}
+	f.Equipments[equip.Name] = *equip
+	return equip, nil
 }
 
 func (f *FakeNetworkAPI) GetEquipment(ctx context.Context, name string) (*Equipment, error) {
-	return nil, errors.New("GetEquipment is not implemented yet")
+	if f.Equipments == nil {
+		return nil, errNotFound
+	}
+	equipment, ok := f.Equipments[name]
+	if !ok {
+		return nil, errNotFound
+	}
+	return &equipment, nil
 }
 
 func (f *FakeNetworkAPI) DeleteIP(ctx context.Context, id int) error {
