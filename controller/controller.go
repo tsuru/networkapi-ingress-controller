@@ -182,13 +182,19 @@ func (r *reconcileIngress) targetsForService(ctx context.Context, ing *networkin
 			return targets, nil
 		}
 
+		uniqueTargets := map[string]bool{}
 		for _, p := range ports {
+			key := fmt.Sprintf("%s:%d", ip, p.Port)
+			if uniqueTargets[key] {
+				continue
+			}
 			targets = append(targets, target{
 				IP:        net.ParseIP(ip),
 				Port:      int(p.Port),
 				TLS:       p.Port == int32(443),
 				NetworkID: r.cfg.LBNetworkID,
 			})
+			uniqueTargets[key] = true
 		}
 
 		return targets, nil
