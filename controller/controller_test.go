@@ -450,10 +450,20 @@ func TestReconcileTakeOver(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeLoadBalancer,
 			Ports: []corev1.ServicePort{
 				{
 					Name: "http",
 					Port: 80,
+				},
+			},
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{
+					{
+						IP: "10.1.1.1",
+					},
 				},
 			},
 		},
